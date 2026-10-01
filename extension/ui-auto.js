@@ -1,4 +1,4 @@
-/* Tự bấm giao diện trang chi tiết ticket: chọn "Loại", chọn "Lý do", bấm "Cập nhật", rồi chờ request lưu của chính trang.
+/* Tự bấm giao diện trang chi tiết ticket: chọn "Loại", chọn "Lý do" trong danh sách trang hiện ra (không gõ/dán chữ vào ô), bấm "Cập nhật", rồi chờ request lưu của chính trang.
  * Không biết trước HTML của hệ thống nên tìm ô theo nhãn chữ + vị trí trên màn hình, và bấm bằng chuỗi sự kiện chuột thật.
  * Khi lỗi, thông báo kèm những gì đang thấy trên trang để dễ chỉnh. */
 (function (root, factory) {
@@ -43,14 +43,6 @@
       const Ctor = type.startsWith('pointer') && typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
       target.dispatchEvent(new Ctor(type, init));
     }
-  }
-
-  function setNativeValue(input, value) {
-    const proto = Object.getPrototypeOf(input);
-    const setter = Object.getOwnPropertyDescriptor(proto, 'value');
-    if (setter && setter.set) setter.set.call(input, value);
-    else input.value = value;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
   /* ---------- Tìm ô theo nhãn ---------- */
@@ -147,39 +139,45 @@
       const now = optionCandidates(want, control);
       return now.find((e) => !before.has(e)) || now[0] || null;
     };
-    // Thử lần lượt các cách mở dropdown cho tới khi lựa chọn xuất hiện.
+    // Danh sách lựa chọn có thể được tải sau khi trang mở (dropdown hiện "No data" lúc đầu): chờ, nếu vẫn rỗng
+    // thì đóng lại, đợi rồi mở lại. Xen kẽ các cách mở khác nhau phòng khi dropdown cần kiểu bấm khác.
     const inner = control.querySelector('input, button, [role="combobox"], [tabindex]');
-    const openers = [
-      () => realClick(control),
-      () => control.click(),
-      () => { (inner || control).focus(); (inner || control).click(); },
-      () => { const t = inner || control; t.focus(); pressKey(t, ' '); pressKey(t, 'Enter'); pressKey(t, 'ArrowDown'); },
+    const clickOpen = () => realClick(control);
+    const plainOpen = () => control.click();
+    const focusOpen = () => { (inner || control).focus(); (inner || control).click(); };
+    const keyOpen = () => { const t = inner || control; t.focus(); pressKey(t, ' '); pressKey(t, 'Enter'); pressKey(t, 'ArrowDown'); };
+    const attempts = [
+      [clickOpen, 6000], [clickOpen, 5000], [plainOpen, 2500], [focusOpen, 2500], [keyOpen, 2500], [clickOpen, 8000], [clickOpen, 8000],
     ];
+    const closeDropdown = async () => {
+      const t = document.activeElement || document.body;
+      pressKey(t, 'Escape');
+      if (t.blur) t.blur();
+      await sleep(400);
+    };
     let option = null;
-    for (const open of openers) {
+    let sawNoData = false;
+    let appeared = []; // những gì từng hiện ra sau khi mở (lưu lại vì dropdown sẽ bị đóng giữa các lần thử)
+    for (let i = 0; i < attempts.length && !option; i++) {
+      const [open, patience] = attempts[i];
+      if (i > 0) { await closeDropdown(); await sleep(1500); }
       open();
-      option = await waitFor(findOption, 1800);
-      if (option) break;
-    }
-    if (!option) { // dropdown có ô tìm kiếm: gõ chữ cần chọn rồi tìm lại
-      const input = (document.activeElement && document.activeElement.tagName === 'INPUT' && document.activeElement) || control.querySelector('input');
-      if (input) {
-        setNativeValue(input, wantText);
-        option = await waitFor(findOption, 2500);
-      }
+      option = await waitFor(findOption, patience);
+      const seen = newlyVisibleTexts(beforeVisible);
+      if (seen.length) appeared = seen;
+      if (!option && /no data|không có dữ liệu|trống/.test(key(document.body.innerText).replace(/\s+/g, ' '))) sawNoData = true;
     }
     if (!option) {
-      const appeared = newlyVisibleTexts(beforeVisible);
-      throw new Error(`Không thấy lựa chọn "${wantText}" của ô "${fieldName}". `
+      throw new Error(`Không thấy lựa chọn "${wantText}" của ô "${fieldName}" (ô đang hiện "${(control.innerText || '').trim().replace(/\s+/g, ' ')}"). `
         + (appeared.length
-          ? `Sau khi bấm, trang hiện thêm: ${appeared.join(' | ')}`
+          ? `Sau khi bấm, trang hiện thêm: ${appeared.join(' | ')}${sawNoData ? ' — danh sách rỗng, có thể chưa tải xong hoặc ticket này không có lựa chọn đó' : ''}`
           : 'Sau khi bấm, trang không hiện thêm gì (dropdown không mở; thử bật "Mở tab chi tiết ở phía trước" ở Cài đặt → Nâng cao)'));
     }
     realClick(option);
     const applied = await waitFor(() => { const c = getControl(); return c && valueOf(c) === want; }, 4000);
     if (!applied) {
       const c = getControl();
-      throw new Error(`Đã bấm "${wantText}" nhưng ô "${fieldName}" đang hiện "${c ? (c.innerText || '').trim() : '?'}"`);
+      throw new Error(`Đã bấm "${wantText}" nhưng ô "${fieldName}" đang hiện "${c ? (c.innerText || '').trim().replace(/\s+/g, ' ') : '?'}"`);
     }
     return 'đã chọn';
   }

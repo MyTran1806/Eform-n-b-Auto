@@ -22,10 +22,17 @@ const html = (variant) => `<!doctype html><meta charset="utf-8">
     const r = sel.getBoundingClientRect();
     const pop = document.createElement('div');
     pop.className = 'pop'; pop.style.left = r.left + 'px'; pop.style.top = r.bottom + 'px';
-    pop.innerHTML = options.map((o) => '<div class="opt">' + (variant === 'split' ? '<span>' + o.slice(0, 5) + '</span><span>' + o.slice(5) + '</span>' : o) + '</div>').join('');
+    const render = () => { pop.innerHTML = options.map((o) => '<div class="opt">' + (variant === 'split' ? '<span>' + o.slice(0, 5) + '</span><span>' + o.slice(5) + '</span>' : o) + '</div>').join(''); };
+    // lazy: danh sách rỗng ("No data") rồi tự cập nhật sau 3 giây; reopen: dữ liệu về sau 3 giây nhưng chỉ hiện ở lần mở sau
+    if ((variant === 'lazy' || variant === 'reopen') && !window.__loaded) {
+      pop.innerHTML = '<div class="opt">No data</div>';
+      if (variant === 'lazy') setTimeout(() => { window.__loaded = true; render(); }, 3000);
+      else setTimeout(() => { window.__loaded = true; }, 3000);
+    } else render();
     pop.onclick = (e) => { const o = e.target.closest('.opt'); if (o) { sel.querySelector('span').textContent = o.textContent; pop.remove(); } };
     document.body.append(pop);
   }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const p = document.querySelector('.pop'); if (p) p.remove(); } });
   if (variant === 'keyboard') sel.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
   else sel.addEventListener('click', open);
   document.getElementById('save').onclick = () => window.postMessage({ channel: 'tt-bulk', dir: 'to-content', type: 'write', status: 200, text: 'ok' }, '*');
@@ -56,6 +63,8 @@ const html = (variant) => `<!doctype html><meta charset="utf-8">
   });
   await check('dropdown chỉ mở bằng bàn phím thì vẫn chọn được', 'keyboard', (r) => assert.equal(r.ok, true, r.note));
   await check('chữ lựa chọn bị tách qua nhiều thẻ con vẫn chọn được', 'split', (r) => assert.equal(r.ok, true, r.note));
+  await check('danh sách hiện "No data" rồi tự có dữ liệu sau vài giây', 'lazy', (r) => assert.equal(r.ok, true, r.note));
+  await check('danh sách "No data" lần đầu, lần mở sau mới có dữ liệu', 'reopen', (r) => assert.equal(r.ok, true, r.note));
   await check('dropdown không mở: báo rõ là trang không hiện thêm gì', 'never', (r) => {
     assert.equal(r.ok, false);
     assert.match(r.note, /trang không hiện thêm gì/);

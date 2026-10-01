@@ -14,6 +14,7 @@ const TOKEN = 'tok-123';
 
 const received = []; // request đổi loại server nhận được
 let failCodes = new Set();
+const updates = []; // request tới /cs-ticket/update (mô phỏng API thật: body {id, custom_fields})
 let summaryOverride = null; // mô phỏng trang báo 'Đã chọn N' khác số dòng đọc được
 
 const ROWS = ['691000001', '691000002', '691000003', '691000004', '691000005'];
@@ -38,7 +39,7 @@ function page(variant) {
   <button id="sim-fetch">sim fetch</button> <button id="sim-xhr">sim xhr</button>
   <script>
     // Trang tự gửi request kèm Token như app thật (extension học token từ đây).
-    fetch('/api/list', { headers: { Token: '${TOKEN}' } });
+    fetch('/api/list', { headers: { Token: '${TOKEN}', 'X-Shop': '7' } });
     document.getElementById('sim-fetch').onclick = () => fetch('/api/tickets/691000001/type', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Token: '${TOKEN}' },
       body: JSON.stringify({ ticket: '691000001', type: 'complaint', note: 'tay' }) });
@@ -62,7 +63,18 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }).end('{"success":true}');
       return;
     }
-    if (req.url === '/api/list') { res.writeHead(200).end('[]'); return; }
+    if (req.url === '/api/list') {
+      // Danh sách có id nội bộ; cố ý thiếu ticket cuối để thử trường hợp không tìm thấy id.
+      const data = ROWS.slice(0, 4).map((c, i) => ({ id: 4900001 + i, ticket_code: c, order_code: `GYR${i}`, assignee: { id: 77, name: 'x' } }));
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data }));
+      return;
+    }
+    if (req.url === '/cs-ticket/update') {
+      updates.push({ headers: req.headers, body });
+      if (req.headers.token !== TOKEN || req.headers['x-shop'] !== '7') { res.writeHead(401).end('{"error":"unauthorized"}'); return; }
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{"success":true}');
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page(req.url.startsWith('/aria') ? 'aria' : 'input'));
   });
 });
@@ -212,6 +224,42 @@ const step = async (name, fn) => {
       await $('.tab:has-text("Cài đặt")').click();
       await $('text=Đã lưu: POST').waitFor();
       assert.match(await $('textarea').first().inputValue(), /Khiếu nại \| complaint/);
+    });
+
+    await step('điền sẵn cấu hình: có 3 loại, dùng {{id}} + lý do, header token tự lấy từ trang', async () => {
+      await $('button:has-text("Điền sẵn cấu hình")').click();
+      await $('text=Đã điền sẵn.').waitFor();
+      assert.match(await $('textarea').first().inputValue(), /Hồi lấy \| Hồi Giao\/Lấy\/Trả hàng \| Hồi lấy/);
+      await $('button:has-text("Sửa mẫu hiện tại")').click();
+      assert.match(await $('label:has-text("URL") input').inputValue(), /cm-gateway\.ghn\.vn.*cs-ticket\/update$/);
+      await $('label:has-text("URL") input').fill(`${origin}/cs-ticket/update`); // trỏ về API giả lập
+      await $('button:has-text("Lưu mẫu")').click();
+      await $('.tab:has-text("Đổi loại")').click();
+      updates.length = 0;
+      await $('select').first().selectOption({ label: 'Hồi lấy' });
+      await $('button:has-text("Đổi 3 ticket sang")').click();
+      await $('text=Xong, hãy tải lại danh sách').waitFor();
+      assert.equal(updates.length, 3);
+      const sent = updates.map((u) => JSON.parse(u.body)).sort((a, b) => a.id - b.id);
+      assert.deepEqual(sent, [4900001, 4900002, 4900003].map((id) => ({
+        id, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' },
+      })));
+      for (const u of updates) assert.equal(u.headers['content-type'], 'application/json');
+    });
+
+    await step('ticket không có id trong dữ liệu trang thì báo lỗi riêng, không gửi', async () => {
+      checkedRows.add('691000005');
+      await p.reload();
+      await $('.launcher').click();
+      await $('text=Đã tick: 4 ticket').waitFor();
+      updates.length = 0;
+      await $('select').first().selectOption({ label: 'Hồi trả' });
+      await $('button:has-text("Đổi 4 ticket sang")').click();
+      await $('text=Xong, hãy tải lại danh sách').waitFor();
+      await $('text=Thành công 3/4, lỗi 1').waitFor();
+      await $('text=691000005 — Không tìm thấy id nội bộ').waitFor();
+      assert.equal(updates.length, 3);
+      checkedRows.delete('691000005');
     });
 
     await step('chọn ô theo role=checkbox/aria-checked + class "-checked" cũng đọc được', async () => {

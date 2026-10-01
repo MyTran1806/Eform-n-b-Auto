@@ -16,12 +16,21 @@ Extension không biết trước API của hệ thống, nên bạn **thao tác 
 
 Bấm nút cam góc phải dưới → tab **Cài đặt**.
 
-1. **Danh sách loại**: mỗi dòng `Tên hiển thị | giá trị gửi lên`, ví dụ
+### Cách nhanh (đổi sang "Hồi Giao/Lấy/Trả hàng" + lý do)
+
+Bấm **Điền sẵn cấu hình**. Extension điền sẵn mẫu request `cs-ticket/update` và 3 loại: *Hồi giao*, *Hồi lấy*, *Hồi trả*
+(cùng gửi `type = "Hồi Giao/Lấy/Trả hàng"`, mỗi loại một `ly_do_hoi_giao_lay_tra` tương ứng). Xong, sang tab **Đổi loại** để dùng.
+API dùng `id` nội bộ của ticket, extension tự học `id` từ dữ liệu danh sách mà trang đã tải (cần tải lại trang sau khi bật extension).
+Nếu chữ loại/lý do trên hệ thống khác (đúng dấu, hoa/thường), sửa ở ô **Danh sách loại**.
+
+### Cách thủ công (cho thao tác khác)
+
+1. **Danh sách loại**: mỗi dòng `Tên hiển thị | giá trị gửi lên | lý do (không bắt buộc)`, ví dụ
    ```
    Khiếu nại | complaint
-   Hồi giao/lấy/trả hàng | return
+   Hồi giao | Hồi Giao/Lấy/Trả hàng | Hồi giao
    ```
-   Giá trị gửi lên là giá trị hệ thống thật sự dùng (xem trong request ở bước 2).
+   Giá trị gửi lên là giá trị hệ thống thật sự dùng (xem trong request ở bước 2). Trong mẫu, `{{type}}` là giá trị, `{{reason}}` là lý do.
 2. **Mẫu request**:
    1. Bấm **Bắt đầu ghi**.
    2. Trên trang, đổi loại 1 ticket bằng cách hệ thống đang cho (hoặc bấm **Cập nhật** ở thanh dưới).
@@ -45,7 +54,7 @@ Token/CSRF (header `Authorization`, `Token`, `X-XSRF-TOKEN`...) **không đượ
 
 ## Giới hạn đã biết
 
-- Mã ticket được đọc từ chữ hiển thị trên bảng (mặc định chuỗi 9-15 chữ số). Nếu API cần một ID nội bộ khác với mã hiển thị, mẫu `{{ticket}}` sẽ không đúng.
+- Mã ticket được đọc từ chữ hiển thị trên bảng (mặc định chuỗi 9-15 chữ số). Nếu API cần `id` nội bộ, dùng `{{id}}` trong mẫu: extension tìm `id` trong dữ liệu JSON mà trang đã tải (object có `id` và chứa mã ticket). Ticket không tìm thấy `id`, hoặc mã khớp nhiều `id` khác nhau, sẽ báo lỗi và không bị gửi.
 - Body request phải là text (JSON hoặc `x-www-form-urlencoded`). `multipart/form-data` chưa hỗ trợ.
 - Nếu danh sách chỉ hiển thị một phần số phiếu đã chọn (cuộn ảo hoặc phân trang), extension chỉ thấy các dòng đang hiển thị và sẽ cảnh báo.
 - Nếu hệ thống trả HTTP 200 kể cả khi lỗi, đặt regex nhận diện lỗi ở **Cài đặt → Nâng cao** (ví dụ `"success"\s*:\s*false`).

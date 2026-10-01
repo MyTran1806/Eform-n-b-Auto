@@ -73,12 +73,12 @@ test('placeholdersIn', () => {
 });
 
 test('parseTypes', () => {
-  const ok = C.parseTypes('Khiếu nại | complaint\n\n# ghi chú\nHồi giao | return | extra');
-  assert.deepEqual(ok.types, [{ label: 'Khiếu nại', value: 'complaint' }, { label: 'Hồi giao', value: 'return | extra' }]);
+  const ok = C.parseTypes('Khiếu nại | complaint\n\n# ghi chú\nHồi giao | Hồi Giao/Lấy/Trả hàng | Hồi giao');
+  assert.deepEqual(ok.types, [{ label: 'Khiếu nại', value: 'complaint' }, { label: 'Hồi giao', value: 'Hồi Giao/Lấy/Trả hàng', reason: 'Hồi giao' }]);
   assert.equal(ok.errors.length, 0);
   const bad = C.parseTypes('thiếu giá trị\nA |');
   assert.equal(bad.errors.length, 2);
-  assert.equal(C.stringifyTypes(ok.types).split('\n').length, 2);
+  assert.equal(C.stringifyTypes(ok.types), 'Khiếu nại | complaint\nHồi giao | Hồi Giao/Lấy/Trả hàng | Hồi giao');
 });
 
 test('parseSelectedSummary', () => {
@@ -93,4 +93,13 @@ test('evaluateResult', () => {
   assert.equal(C.evaluateResult({ status: 200, text: '{"success":false}' }, '"success"\\s*:\\s*false').ok, false);
   assert.equal(C.evaluateResult({ status: 200, text: 'ok' }, '(').ok, true); // regex sai -> bỏ qua
   assert.equal(C.evaluateResult({ status: 0, error: 'mất mạng' }).ok, false);
+});
+
+test('presetGhn render ra body đúng như request thật (id số, loại + lý do là chữ)', () => {
+  const { types, template } = C.presetGhn();
+  assert.deepEqual(types.map((x) => x.label), ['Hồi giao', 'Hồi lấy', 'Hồi trả']);
+  const req = C.renderTemplate(template, { id: 4914047, type: types[1].value, reason: types[1].reason });
+  assert.equal(req.url, 'https://cm-gateway.ghn.vn/ticket-connector/public-api/web/cs-ticket/update');
+  assert.deepEqual(JSON.parse(req.body), { id: 4914047, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' } });
+  assert.deepEqual([...C.placeholdersIn(template)].sort(), ['id', 'reason', 'type']);
 });

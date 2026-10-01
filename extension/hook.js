@@ -11,7 +11,12 @@
   const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
   const SENSITIVE = /authorization|token|csrf|xsrf|session|api-?key|secret/i;
   const origFetch = window.fetch.bind(window);
+  const SKIP_HEADER = /^(host|content-length|connection|accept-encoding|user-agent|origin|referer|cookie|keep-alive|te|upgrade|priority|sec-.+)$/i;
+  const CODE = /^\d{9,15}$/;
   const lastSensitive = new Map(); // "host|ten-header" -> giá trị mới nhất (chỉ giữ trong bộ nhớ)
+  const lastHeaders = new Map(); // host -> header trang vừa gửi tới host đó (token, header tuỳ biến...), chỉ trong bộ nhớ
+  const idByCode = new Map(); // mã ticket hiển thị -> id nội bộ, học từ phản hồi JSON của trang
+  const ambiguousCodes = new Set();
   let recording = false;
   let seq = 0;
 
@@ -29,11 +34,44 @@
 
   function noteHeaders(url, headers) {
     const host = hostOf(url);
+    const seen = lastHeaders.get(host) || {};
     for (const [name, value] of Object.entries(headers)) {
-      if (!value || !SENSITIVE.test(name)) continue;
+      if (!value) continue;
+      if (!SKIP_HEADER.test(name)) seen[name.toLowerCase()] = value;
+      if (!SENSITIVE.test(name)) continue;
       lastSensitive.set(`${host}|${name.toLowerCase()}`, value);
       lastSensitive.set(`*|${name.toLowerCase()}`, value);
     }
+    lastHeaders.set(host, seen);
+  }
+
+  // Duyệt JSON phản hồi: object có "id" và chứa chuỗi giống mã ticket -> ghi nhớ mã -> id.
+  function indexIds(root) {
+    const stack = [root];
+    let visited = 0;
+    while (stack.length && visited < 300000) {
+      const n = stack.pop();
+      visited += 1;
+      if (!n || typeof n !== 'object') continue;
+      if (Array.isArray(n)) { n.forEach((x) => stack.push(x)); continue; }
+      const id = n.id;
+      const hasId = (typeof id === 'number' && Number.isFinite(id)) || (typeof id === 'string' && /^\d+$/.test(id));
+      for (const v of Object.values(n)) {
+        if (typeof v === 'string') {
+          if (!hasId || !CODE.test(v)) continue;
+          if (idByCode.has(v) && String(idByCode.get(v)) !== String(id)) ambiguousCodes.add(v);
+          idByCode.set(v, id);
+        } else if (v && typeof v === 'object') {
+          stack.push(v);
+        }
+      }
+    }
+    if (idByCode.size > 200000) { idByCode.clear(); ambiguousCodes.clear(); }
+  }
+
+  function indexText(text) {
+    if (!text || text.length > 5e6) return;
+    try { indexIds(JSON.parse(text)); } catch (e) { /* không phải JSON */ }
   }
 
   function describeBody(b) {
@@ -63,6 +101,9 @@
     } catch (e) { /* không để lỗi quan sát làm hỏng request của trang */ }
 
     const p = origFetch(input, init);
+    p.then((r) => {
+      if (/json/i.test(r.headers.get('content-type') || '')) r.clone().text().then(indexText, () => {});
+    }, () => {});
     if (entry) {
       const send = (status) => Promise.resolve(entry.ready).then(() => {
         delete entry.ready;
@@ -93,6 +134,13 @@
       try {
         const url = new URL(t.url, location.href).href;
         noteHeaders(url, t.headers);
+        this.addEventListener('loadend', () => {
+          try {
+            if (!/json/i.test(this.getResponseHeader('content-type') || '')) return;
+            if (this.responseType === 'json') indexIds(this.response);
+            else if (this.responseType === '' || this.responseType === 'text') indexText(this.responseText);
+          } catch (e) { /* bỏ qua */ }
+        });
         if (recording && !SAFE_METHODS.has(t.method)) {
           const entry = { id: ++seq, method: t.method, url, headers: { ...t.headers }, ...describeBody(body) };
           this.addEventListener('loadend', () => post({ type: 'captured', req: { ...entry, status: this.status } }));
@@ -106,15 +154,21 @@
 
   async function replay(id, req) {
     try {
-      const headers = Object.assign({}, req.headers);
       const host = hostOf(req.url);
+      // Nền là header trang vừa gửi tới host này (token, header tuỳ biến); header trong mẫu ghi đè lên.
+      const headers = Object.assign({}, lastHeaders.get(host));
+      const setHeader = (name, value) => {
+        for (const k of Object.keys(headers)) if (k.toLowerCase() === name.toLowerCase()) delete headers[k];
+        headers[name] = value;
+      };
+      for (const [name, value] of Object.entries(req.headers || {})) setHeader(name, value);
       for (const name of req.dynamicHeaders || []) {
         const key = name.toLowerCase();
         const value = lastSensitive.get(`${host}|${key}`) || lastSensitive.get(`*|${key}`);
         if (!value) {
           throw new Error(`Chưa thấy trang gửi header "${name}". Hãy thao tác bất kỳ trên trang (ví dụ lọc lại danh sách) rồi chạy lại.`);
         }
-        headers[name] = value;
+        setHeader(name, value);
       }
       const res = await origFetch(req.url, {
         method: req.method,
@@ -135,6 +189,15 @@
     if (ev.source !== window || !d || d.channel !== CH || d.dir !== 'to-hook') return;
     if (d.type === 'record') recording = !!d.on;
     else if (d.type === 'replay') replay(d.id, d.req);
+    else if (d.type === 'resolve-ids') {
+      const ids = {};
+      const ambiguous = [];
+      for (const code of d.codes || []) {
+        if (ambiguousCodes.has(code)) ambiguous.push(code);
+        else if (idByCode.has(code)) ids[code] = idByCode.get(code);
+      }
+      post({ type: 'ids', id: d.id, ids, ambiguous });
+    }
     else if (d.type === 'ping') post({ type: 'ready' });
   });
 

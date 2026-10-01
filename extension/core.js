@@ -8,7 +8,7 @@
   const DEFAULT_CODE_REGEX = '\\b\\d{9,15}\\b';
   const SKIP_HEADER = /^(host|content-length|connection|accept-encoding|user-agent|origin|referer|cookie|keep-alive|te|upgrade|priority|sec-.+)$/i;
   const SENSITIVE_HEADER = /authorization|token|csrf|xsrf|session|api-?key|secret/i;
-  const PLACEHOLDER = /\{\{\s*(ticket|type)\s*\}\}/g;
+  const PLACEHOLDER = /\{\{\s*(ticket|id|type|reason)\s*\}\}/g;
 
   /* ---------- Header ---------- */
 
@@ -52,7 +52,7 @@
       if (!value) continue;
       for (const v of new Set([value, escapeValue(kind, value)])) alts.push({ v, placeholder });
     }
-    const counts = { ticket: 0, type: 0 };
+    const counts = { ticket: 0, type: 0, id: 0, reason: 0 };
     if (!alts.length || !text) return { text, counts };
     alts.sort((a, b) => b.v.length - a.v.length);
     const re = new RegExp(alts.map((a) => escapeRegExp(a.v)).join('|'), 'g');
@@ -110,7 +110,7 @@
     return found;
   }
 
-  /* ---------- Danh sách loại: mỗi dòng "Tên hiển thị | giá trị gửi lên" ---------- */
+  /* ---------- Danh sách loại: mỗi dòng "Tên hiển thị | giá trị gửi lên | lý do (tuỳ chọn)" ---------- */
 
   function parseTypes(text) {
     const types = [];
@@ -118,17 +118,39 @@
     String(text || '').split(/\r?\n/).forEach((line, i) => {
       const s = line.trim();
       if (!s || s.startsWith('#')) return;
-      const at = s.indexOf('|');
-      const label = at < 0 ? '' : s.slice(0, at).trim();
-      const value = at < 0 ? '' : s.slice(at + 1).trim();
-      if (!label || !value) errors.push(`Dòng ${i + 1}: cần dạng "Tên hiển thị | giá trị"`);
-      else types.push({ label, value });
+      const [label = '', value = '', ...rest] = s.split('|').map((x) => x.trim());
+      if (!label || !value) {
+        errors.push(`Dòng ${i + 1}: cần dạng "Tên hiển thị | giá trị" (thêm "| lý do" nếu có)`);
+        return;
+      }
+      const reason = rest.join(' | ');
+      types.push(reason ? { label, value, reason } : { label, value });
     });
     return { types, errors };
   }
 
   function stringifyTypes(types) {
-    return (types || []).map((t) => `${t.label} | ${t.value}`).join('\n');
+    return (types || []).map((t) => [t.label, t.value, t.reason].filter(Boolean).join(' | ')).join('\n');
+  }
+
+  /* ---------- Cấu hình điền sẵn cho form "Loại + Lý do Hồi Giao/Lấy/Trả" của hệ thống CS ---------- */
+
+  function presetGhn() {
+    const type = 'Hồi Giao/Lấy/Trả hàng';
+    return {
+      types: [
+        { label: 'Hồi giao', value: type, reason: 'Hồi giao' },
+        { label: 'Hồi lấy', value: type, reason: 'Hồi lấy' },
+        { label: 'Hồi trả', value: type, reason: 'Hồi trả' },
+      ],
+      template: {
+        method: 'POST',
+        url: 'https://cm-gateway.ghn.vn/ticket-connector/public-api/web/cs-ticket/update',
+        headers: { 'Content-Type': 'application/json' },
+        dynamicHeaders: [],
+        body: '{"id":{{id}},"custom_fields":{"type":"{{type}}","ly_do_hoi_giao_lay_tra":"{{reason}}"}}',
+      },
+    };
   }
 
   /* ---------- Đọc ticket đã tick trên trang ---------- */
@@ -209,6 +231,7 @@
     placeholdersIn,
     parseTypes,
     stringifyTypes,
+    presetGhn,
     parseSelectedSummary,
     readSelectedTickets,
     evaluateResult,

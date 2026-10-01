@@ -25,6 +25,8 @@
   let running = false;
   let stopRequested = false;
   let codes = [];
+  let idMap = {}; // mã hiển thị -> id nội bộ (học từ danh sách của trang)
+  let idAmbiguous = new Set();
   let seq = 0;
   const pending = new Map();
   const failed = [];
@@ -58,7 +60,7 @@
       hookReady = true;
     } else if (d.type === 'captured') {
       if (recording) { captured.push(d.req); renderCaptures(); }
-    } else if (d.type === 'replay-result') {
+    } else if (d.type === 'replay-result' || d.type === 'ids') {
       const resolve = pending.get(d.id);
       if (resolve) { pending.delete(d.id); resolve(d); }
     }
@@ -80,6 +82,15 @@
       }, 30000);
       pending.set(id, (res) => { clearTimeout(timer); resolve(res); });
       toHook({ type: 'replay', id, req });
+    });
+  }
+
+  function resolveIds(batch) {
+    return new Promise((resolve) => {
+      const id = ++seq;
+      const timer = setTimeout(() => { pending.delete(id); resolve({ ids: {}, ambiguous: [] }); }, 5000);
+      pending.set(id, (res) => { clearTimeout(timer); resolve(res); });
+      toHook({ type: 'resolve-ids', id, codes: batch });
     });
   }
 
@@ -156,7 +167,7 @@
     copyFailBtn);
 
   // --- Tab "Cài đặt"
-  const typesTa = h('textarea', { rows: 4, placeholder: 'Khiếu nại | complaint\nHồi giao/lấy/trả hàng | return' });
+  const typesTa = h('textarea', { rows: 4, placeholder: 'Hồi giao | Hồi Giao/Lấy/Trả hàng | Hồi giao' });
   const typesMsg = h('div', { class: 'msg' });
 
   const tplInfo = h('div', { class: 'muted' });
@@ -200,9 +211,14 @@
   const checkedInput = h('input', { type: 'text', placeholder: 'Ví dụ input[type=checkbox]:checked' });
   const advMsg = h('div', { class: 'msg' });
 
+  const presetMsg = h('div', { class: 'msg' });
   const setupPane = h('div', { class: 'pane', hidden: true },
+    h('h3', {}, 'Cách nhanh'),
+    h('div', { class: 'muted' }, 'Điền sẵn mẫu "Loại = Hồi Giao/Lấy/Trả hàng" kèm lý do (Hồi giao / Hồi lấy / Hồi trả) cho hệ thống CS. Không cần ghi request.'),
+    h('button', { class: 'primary', onclick: applyPreset }, 'Điền sẵn cấu hình'),
+    presetMsg,
     h('h3', {}, '1. Danh sách loại'),
-    h('div', { class: 'muted' }, 'Mỗi dòng: Tên hiển thị | giá trị gửi lên hệ thống.'),
+    h('div', { class: 'muted' }, 'Mỗi dòng: Tên hiển thị | giá trị gửi lên | lý do (không bắt buộc).'),
     typesTa,
     h('button', { class: 'primary', onclick: saveTypes }, 'Lưu danh sách loại'),
     typesMsg,
@@ -292,7 +308,7 @@
     if (!cfg.types.length) missing.push('danh sách loại');
     if (!cfg.template) missing.push('mẫu request');
     needSetup.hidden = !missing.length;
-    needSetup.textContent = missing.length ? `Chưa có ${missing.join(' và ')} — sang tab Cài đặt để thiết lập.` : '';
+    needSetup.textContent = missing.length ? `Chưa có ${missing.join(' và ')} — sang tab Cài đặt, bấm "Điền sẵn" để thiết lập.` : '';
     const typeIdx = typeSel.value === '' ? -1 : Number(typeSel.value);
     startBtn.disabled = running || !codes.length || typeIdx < 0 || missing.length > 0;
     startBtn.textContent = typeIdx >= 0 && codes.length ? `Đổi ${codes.length} ticket sang "${cfg.types[typeIdx].label}"` : 'Đổi loại';
@@ -325,7 +341,12 @@
   async function runOne(code, type) {
     let req;
     try {
-      req = C.renderTemplate(cfg.template, { ticket: code, type: type.value });
+      if (C.placeholdersIn(cfg.template).has('id') && idMap[code] == null) {
+        throw new Error(idAmbiguous.has(code)
+          ? 'Mã này khớp nhiều id khác nhau trong dữ liệu trang nên bỏ qua để tránh đổi nhầm'
+          : 'Không tìm thấy id nội bộ của ticket này (hãy tải lại danh sách rồi thử lại)');
+      }
+      req = C.renderTemplate(cfg.template, { ticket: code, id: idMap[code], type: type.value, reason: type.reason });
     } catch (e) {
       addLog(code, false, e.message);
       return false;
@@ -352,7 +373,22 @@
       warn.textContent = 'Extension chưa gắn được vào trang. Hãy tải lại trang (F5) rồi thử lại.';
       return;
     }
-    if (!window.confirm(`Đổi loại ${batch.length} ticket sang "${type.label}"?\n\nTicket đầu tiên chạy trước để kiểm tra; nếu lỗi sẽ dừng lại.`)) return;
+    let note = '';
+    idMap = {};
+    idAmbiguous = new Set();
+    if (C.placeholdersIn(cfg.template).has('id')) {
+      const r = await resolveIds(batch);
+      idMap = r.ids;
+      idAmbiguous = new Set(r.ambiguous);
+      const missing = batch.filter((c) => idMap[c] == null).length;
+      if (missing === batch.length) {
+        warn.hidden = false;
+        warn.textContent = 'Chưa học được id nội bộ của các ticket này. Hãy tải lại trang (F5) để extension thấy dữ liệu danh sách, tick lại rồi thử lại.';
+        return;
+      }
+      if (missing) note = `\n\n${missing} ticket không tìm thấy id nội bộ sẽ báo lỗi.`;
+    }
+    if (!window.confirm(`Đổi ${batch.length} ticket sang "${type.label}"${type.reason ? ` (lý do: ${type.reason})` : ''}?${note}\n\nTicket đầu tiên chạy trước để kiểm tra; nếu lỗi sẽ dừng lại.`)) return;
 
     running = true;
     stopRequested = false;
@@ -397,6 +433,20 @@
     updateButtons();
     typesMsg.className = 'msg ok';
     typesMsg.textContent = `Đã lưu ${types.length} loại.`;
+  }
+
+  function applyPreset() {
+    if ((cfg.template || cfg.types.length) && !window.confirm('Thay mẫu request và danh sách loại hiện tại bằng cấu hình điền sẵn?')) return;
+    const preset = C.presetGhn();
+    cfg.types = preset.types;
+    cfg.template = preset.template;
+    saveCfg();
+    typesTa.value = C.stringifyTypes(cfg.types);
+    renderTypeOptions();
+    renderTemplateInfo();
+    updateButtons();
+    presetMsg.className = 'msg ok';
+    presetMsg.textContent = 'Đã điền sẵn. Sang tab "Đổi loại" để dùng.';
   }
 
   /* ---------- Cài đặt: ghi lại request ---------- */
@@ -473,7 +523,7 @@
     };
     if (!tpl.url) { edMsg.textContent = 'Thiếu URL.'; return; }
     const used = C.placeholdersIn(tpl);
-    if (!used.has('ticket')) { edMsg.textContent = 'Mẫu chưa có {{ticket}} ở URL hoặc body nên sẽ gửi y hệt cho mọi ticket.'; return; }
+    if (!used.has('ticket') && !used.has('id')) { edMsg.textContent = 'Mẫu chưa có {{ticket}} (hoặc {{id}}) ở URL hoặc body nên sẽ gửi y hệt cho mọi ticket.'; return; }
     if (!used.has('type')) { edMsg.textContent = 'Mẫu chưa có {{type}}. Điền giá trị loại bạn đã chọn ở bước trước, hoặc tự gõ {{type}} vào chỗ chứa loại.'; return; }
     cfg.template = tpl;
     saveCfg();

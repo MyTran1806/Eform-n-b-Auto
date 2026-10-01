@@ -17,7 +17,7 @@
     checkedSelector: '',
     mode: 'ui', // 'ui': tự bấm giao diện trang chi tiết (mở tab nền từng ticket); 'api': gửi lại request theo mẫu
     detailUrl: '/ghn-ticket/cs/detail/{id}?nav=2', // link trang chi tiết, {id} là id nội bộ của ticket
-    foreground: false, // true: mở tab chi tiết ở phía trước (khi chạy nền bị lỗi)
+    foreground: true, // mở tab chi tiết ở phía trước (dropdown thường không mở được khi tab bị ẩn); tắt để chạy nền
     allowSkipReason: false, // true: ticket thuộc nhóm không có trường lý do vẫn tính là xong (chỉ đổi loại)
   };
 
@@ -257,7 +257,7 @@
       h('summary', {}, 'Nâng cao'),
       h('div', { class: 'pane', style: 'padding:8px 0 0' },
         h('label', {}, 'Link trang chi tiết (chế độ tự bấm; {id} là id nội bộ)', detailUrlInput),
-        h('label', { class: 'check' }, foregroundInput, 'Mở tab chi tiết ở phía trước khi chạy (dùng nếu chạy nền bị lỗi)'),
+        h('label', { class: 'check' }, foregroundInput, 'Mở tab chi tiết ở phía trước khi chạy (nên bật; tab ẩn thường không mở được dropdown)'),
         h('label', { class: 'check' }, skipReasonInput, 'Nhóm phiếu không có trường lý do: vẫn tính là xong (chỉ đổi loại, bỏ qua lý do)'),
         h('label', {}, 'Coi là lỗi nếu phản hồi khớp regex', failInput),
         h('label', {}, 'Regex mã ticket', codeInput),
@@ -332,7 +332,7 @@
     needSetup.hidden = !missing.length;
     needSetup.textContent = missing.length ? `Chưa có ${missing.join(' và ')} — sang tab Cài đặt, bấm "Điền sẵn" để thiết lập.` : '';
     modeInfo.textContent = cfg.mode === 'ui'
-      ? 'Cách chạy: tự bấm giao diện (mở tab nền cho từng ticket, mỗi ticket vài giây).'
+      ? 'Cách chạy: tự bấm giao diện (mở tab chi tiết cho từng ticket, mỗi ticket vài giây).'
       : 'Cách chạy: gọi API theo mẫu đã lưu (nhanh).';
     const typeIdx = typeSel.value === '' ? -1 : Number(typeSel.value);
     startBtn.disabled = running || !codes.length || typeIdx < 0 || missing.length > 0;

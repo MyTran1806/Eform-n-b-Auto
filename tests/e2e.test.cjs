@@ -453,7 +453,7 @@ const step = async (name, fn) => {
       await $('button:has-text("Đổi 3 ticket sang")').click();
       await $('.log div:has-text("Không thấy lựa chọn")').waitFor({ timeout: 60000 });
       await $('.log div:has-text("Lý do không tồn tại")').waitFor();
-      await $('.log div:has-text("Đang thấy: Hồi giao | Hồi lấy | Hồi trả")').waitFor();
+      await $('.log div:has-text("Sau khi bấm, trang hiện thêm: Hồi giao | Hồi lấy | Hồi trả")').waitFor();
       assert.equal(updates.length, 0);
       await $('.tab:has-text("Cài đặt")').click();
       await $('button:has-text("Điền sẵn cấu hình")').click(); // trả lại danh sách loại chuẩn

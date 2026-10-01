@@ -81,7 +81,30 @@
   }
 
   function optionCandidates(want, control) {
-    return allElements().filter((el) => visible(el) && ownText(el) === want && !(control && control.contains(el)));
+    const outside = (el) => !(control && control.contains(el));
+    const exact = allElements().filter((el) => visible(el) && ownText(el) === want && outside(el));
+    if (exact.length) return exact;
+    // Chữ lựa chọn bị tách qua nhiều thẻ con: lấy phần tử sâu nhất có toàn bộ chữ khớp.
+    const whole = allElements().filter((el) => visible(el) && outside(el) && key(el.textContent) === want);
+    return whole.filter((el) => !whole.some((o) => o !== el && el.contains(o)));
+  }
+
+  // Những gì vừa xuất hiện trên màn hình so với trước khi bấm (để báo lỗi dễ hiểu).
+  function newlyVisibleTexts(before) {
+    const texts = [];
+    for (const el of allElements()) {
+      if (before.has(el) || !visible(el) || el.children.length > 0) continue;
+      const t = (el.textContent || '').trim().replace(/\s+/g, ' ');
+      if (t && t.length <= 60 && !texts.includes(t)) texts.push(t);
+      if (texts.length >= 12) break;
+    }
+    return texts;
+  }
+
+  function pressKey(el, k) {
+    for (const type of ['keydown', 'keyup']) {
+      el.dispatchEvent(new KeyboardEvent(type, { key: k, code: k === ' ' ? 'Space' : k, bubbles: true, cancelable: true }));
+    }
   }
 
   function visibleOptionTexts() {
@@ -119,12 +142,25 @@
     if (valueOf(control) === want) return 'đã đúng sẵn';
 
     const before = new Set(optionCandidates(want, control));
+    const beforeVisible = new Set(allElements().filter(visible));
     const findOption = () => {
       const now = optionCandidates(want, control);
       return now.find((e) => !before.has(e)) || now[0] || null;
     };
-    realClick(control);
-    let option = await waitFor(findOption, 2500);
+    // Thử lần lượt các cách mở dropdown cho tới khi lựa chọn xuất hiện.
+    const inner = control.querySelector('input, button, [role="combobox"], [tabindex]');
+    const openers = [
+      () => realClick(control),
+      () => control.click(),
+      () => { (inner || control).focus(); (inner || control).click(); },
+      () => { const t = inner || control; t.focus(); pressKey(t, ' '); pressKey(t, 'Enter'); pressKey(t, 'ArrowDown'); },
+    ];
+    let option = null;
+    for (const open of openers) {
+      open();
+      option = await waitFor(findOption, 1800);
+      if (option) break;
+    }
     if (!option) { // dropdown có ô tìm kiếm: gõ chữ cần chọn rồi tìm lại
       const input = (document.activeElement && document.activeElement.tagName === 'INPUT' && document.activeElement) || control.querySelector('input');
       if (input) {
@@ -133,7 +169,11 @@
       }
     }
     if (!option) {
-      throw new Error(`Không thấy lựa chọn "${wantText}" của ô "${fieldName}". Đang thấy: ${visibleOptionTexts().join(' | ') || '(không có danh sách nào đang mở)'}`);
+      const appeared = newlyVisibleTexts(beforeVisible);
+      throw new Error(`Không thấy lựa chọn "${wantText}" của ô "${fieldName}". `
+        + (appeared.length
+          ? `Sau khi bấm, trang hiện thêm: ${appeared.join(' | ')}`
+          : 'Sau khi bấm, trang không hiện thêm gì (dropdown không mở; thử bật "Mở tab chi tiết ở phía trước" ở Cài đặt → Nâng cao)'));
     }
     realClick(option);
     const applied = await waitFor(() => { const c = getControl(); return c && valueOf(c) === want; }, 4000);

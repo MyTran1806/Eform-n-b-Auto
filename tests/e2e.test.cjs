@@ -39,7 +39,7 @@ function page(variant) {
   <button id="sim-fetch">sim fetch</button> <button id="sim-xhr">sim xhr</button>
   <script>
     // Trang tự gửi request kèm Token như app thật (extension học token từ đây).
-    fetch('/api/list', { headers: { Token: '${TOKEN}', 'X-Shop': '7' } });
+    fetch('${apiOrigin}/api/list', { headers: { Token: '${TOKEN}', 'X-Shop': '7', 'X-Extra': '1' } });
     document.getElementById('sim-fetch').onclick = () => fetch('/api/tickets/691000001/type', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Token: '${TOKEN}' },
       body: JSON.stringify({ ticket: '691000001', type: 'complaint', note: 'tay' }) });
@@ -49,6 +49,39 @@ function page(variant) {
       x.send(JSON.stringify({ ticket: '691000002', type: 'complaint' })); };
   </script>`;
 }
+
+let apiOrigin = '';
+let rejectExtraHeader = false; // true: preflight của /cs-ticket/update từ chối header X-Extra mà trang vẫn hay gửi
+
+// API khác origin với trang (như cm-gateway.ghn.vn): CORS ACAO "*" (không cho cookie) và preflight chỉ cho vài header.
+const apiServer = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (d) => { body += d; });
+  req.on('end', () => {
+    const cors = { 'access-control-allow-origin': '*' };
+    if (req.method === 'OPTIONS') {
+      const allow = req.url === '/api/list' || !rejectExtraHeader ? req.headers['access-control-request-headers'] : 'content-type, token, x-shop';
+      const requested = String(req.headers['access-control-request-headers'] || '').toLowerCase().split(',').map((h) => h.trim()).filter(Boolean);
+      const allowed = String(allow).toLowerCase().split(',').map((h) => h.trim());
+      const ok = requested.every((h) => allowed.includes(h));
+      res.writeHead(ok ? 204 : 403, { ...cors, 'access-control-allow-headers': allow, 'access-control-allow-methods': 'GET, POST', 'access-control-max-age': '0' }).end();
+      return;
+    }
+    if (req.url === '/api/list') {
+      // Danh sách có id nội bộ; cố ý thiếu ticket cuối để thử trường hợp không tìm thấy id.
+      const data = ROWS.slice(0, 4).map((c, i) => ({ id: 4900001 + i, ticket_code: c, order_code: `GYR${i}`, assignee: { id: 77, name: 'x' } }));
+      res.writeHead(200, { ...cors, 'content-type': 'application/json' }).end(JSON.stringify({ data }));
+      return;
+    }
+    if (req.url === '/cs-ticket/update') {
+      updates.push({ headers: req.headers, body });
+      if (req.headers.token !== TOKEN) { res.writeHead(401, cors).end('{"error":"unauthorized"}'); return; }
+      res.writeHead(200, { ...cors, 'content-type': 'application/json' }).end('{"success":true}');
+      return;
+    }
+    res.writeHead(404, cors).end();
+  });
+});
 
 const server = http.createServer((req, res) => {
   let body = '';
@@ -60,18 +93,6 @@ const server = http.createServer((req, res) => {
       received.push(record);
       if (req.headers.token !== TOKEN) { res.writeHead(401).end('{"error":"unauthorized"}'); return; }
       if (failCodes.has(m[1])) { res.writeHead(400).end('{"error":"ticket đã đóng"}'); return; }
-      res.writeHead(200, { 'content-type': 'application/json' }).end('{"success":true}');
-      return;
-    }
-    if (req.url === '/api/list') {
-      // Danh sách có id nội bộ; cố ý thiếu ticket cuối để thử trường hợp không tìm thấy id.
-      const data = ROWS.slice(0, 4).map((c, i) => ({ id: 4900001 + i, ticket_code: c, order_code: `GYR${i}`, assignee: { id: 77, name: 'x' } }));
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data }));
-      return;
-    }
-    if (req.url === '/cs-ticket/update') {
-      updates.push({ headers: req.headers, body });
-      if (req.headers.token !== TOKEN || req.headers['x-shop'] !== '7') { res.writeHead(401).end('{"error":"unauthorized"}'); return; }
       res.writeHead(200, { 'content-type': 'application/json' }).end('{"success":true}');
       return;
     }
@@ -102,6 +123,8 @@ const step = async (name, fn) => {
 
 (async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise((r) => apiServer.listen(0, '127.0.0.1', r));
+  apiOrigin = `http://127.0.0.1:${apiServer.address().port}`;
   const origin = `http://127.0.0.1:${server.address().port}`;
   const extDir = prepareExtension();
   const ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), 'tt-prof-')), {
@@ -232,7 +255,7 @@ const step = async (name, fn) => {
       assert.match(await $('textarea').first().inputValue(), /Hồi lấy \| Hồi Giao\/Lấy\/Trả hàng \| Hồi lấy/);
       await $('button:has-text("Sửa mẫu hiện tại")').click();
       assert.match(await $('label:has-text("URL") input').inputValue(), /cm-gateway\.ghn\.vn.*cs-ticket\/update$/);
-      await $('label:has-text("URL") input').fill(`${origin}/cs-ticket/update`); // trỏ về API giả lập
+      await $('label:has-text("URL") input').fill(`${apiOrigin}/cs-ticket/update`); // API khác origin, CORS chặt như thật
       await $('button:has-text("Lưu mẫu")').click();
       await $('.tab:has-text("Đổi loại")').click();
       updates.length = 0;
@@ -245,6 +268,23 @@ const step = async (name, fn) => {
         id, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' },
       })));
       for (const u of updates) assert.equal(u.headers['content-type'], 'application/json');
+      // API chỉ gửi ACAO "*" (không cho cookie): vẫn thành công và mang đủ header trang đang dùng.
+      for (const u of updates) { assert.equal(u.headers['x-shop'], '7'); assert.equal(u.headers['x-extra'], '1'); }
+    });
+
+    await step('một header của trang bị preflight từ chối thì tự gửi lại chỉ với token + header mẫu', async () => {
+      rejectExtraHeader = true;
+      updates.length = 0;
+      await $('select').first().selectOption({ label: 'Hồi trả' });
+      await $('button:has-text("Đổi 3 ticket sang")').click();
+      const t0 = Date.now();
+      while (updates.length < 3) { // không dựa vào chữ tổng kết vì lần chạy trước vẫn còn hiển thị
+        assert.ok(Date.now() - t0 < 15000, 'hết thời gian chờ server nhận request');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      await $('button:has-text("Đổi 3 ticket sang")').waitFor();
+      for (const u of updates) { assert.equal(u.headers.token, TOKEN); assert.equal(u.headers['x-extra'], undefined); }
+      rejectExtraHeader = false;
     });
 
     await step('ticket không có id trong dữ liệu trang thì báo lỗi riêng, không gửi', async () => {
@@ -298,5 +338,6 @@ const step = async (name, fn) => {
   } finally {
     await ctx.close();
     server.close();
+    apiServer.close();
   }
 })();

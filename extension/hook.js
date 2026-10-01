@@ -152,35 +152,60 @@
 
   /* ---------- Gọi lại request theo mẫu ---------- */
 
+  // Gọi cross-origin có thể bị CORS chặn tuỳ cách gửi, nên thử lần lượt (chỉ chuyển cách khác khi lỗi mạng/CORS):
+  //  A. Header đầy đủ như trang vẫn gửi, không kèm cookie (giống axios/fetch mặc định)
+  //  B. Như A nhưng kèm cookie
+  //  C. Chỉ header của mẫu + token/CSRF (phòng khi một header tuỳ biến bị preflight từ chối)
   async function replay(id, req) {
     try {
       const host = hostOf(req.url);
-      // Nền là header trang vừa gửi tới host này (token, header tuỳ biến); header trong mẫu ghi đè lên.
-      const headers = Object.assign({}, lastHeaders.get(host));
-      const setHeader = (name, value) => {
-        for (const k of Object.keys(headers)) if (k.toLowerCase() === name.toLowerCase()) delete headers[k];
-        headers[name] = value;
-      };
-      for (const [name, value] of Object.entries(req.headers || {})) setHeader(name, value);
-      for (const name of req.dynamicHeaders || []) {
-        const key = name.toLowerCase();
-        const value = lastSensitive.get(`${host}|${key}`) || lastSensitive.get(`*|${key}`);
-        if (!value) {
-          throw new Error(`Chưa thấy trang gửi header "${name}". Hãy thao tác bất kỳ trên trang (ví dụ lọc lại danh sách) rồi chạy lại.`);
-        }
-        setHeader(name, value);
+      const tokensOnly = {};
+      for (const [key, value] of lastSensitive) {
+        if (key.startsWith(`${host}|`)) tokensOnly[key.slice(host.length + 1)] = value;
       }
-      const res = await origFetch(req.url, {
-        method: req.method,
-        headers,
-        body: req.body == null ? undefined : req.body,
-        credentials: 'include',
-      });
-      const text = await res.text();
-      post({ type: 'replay-result', id, status: res.status, text: text.slice(0, 2000) });
+      const build = (base) => {
+        const headers = Object.assign({}, base);
+        const setHeader = (name, value) => {
+          for (const k of Object.keys(headers)) if (k.toLowerCase() === name.toLowerCase()) delete headers[k];
+          headers[name] = value;
+        };
+        for (const [name, value] of Object.entries(req.headers || {})) setHeader(name, value);
+        for (const name of req.dynamicHeaders || []) {
+          const key = name.toLowerCase();
+          const value = lastSensitive.get(`${host}|${key}`) || lastSensitive.get(`*|${key}`);
+          if (!value) {
+            throw new Error(`Chưa thấy trang gửi header "${name}". Hãy thao tác bất kỳ trên trang (ví dụ lọc lại danh sách) rồi chạy lại.`);
+          }
+          setHeader(name, value);
+        }
+        return headers;
+      };
+      const pageHeaders = lastHeaders.get(host);
+      const attempts = [
+        { headers: build(pageHeaders), credentials: 'same-origin' },
+        { headers: build(pageHeaders), credentials: 'include' },
+        { headers: build(tokensOnly), credentials: 'same-origin' },
+      ];
+      let lastError;
+      for (const attempt of attempts) {
+        try {
+          const res = await origFetch(req.url, {
+            method: req.method,
+            headers: attempt.headers,
+            body: req.body == null ? undefined : req.body,
+            credentials: attempt.credentials,
+          });
+          const text = await res.text();
+          post({ type: 'replay-result', id, status: res.status, text: text.slice(0, 2000) });
+          return;
+        } catch (e) {
+          if (!(e instanceof TypeError)) throw e;
+          lastError = e;
+        }
+      }
+      throw new Error(`${lastError && lastError.message} (đã thử 3 cách gửi; mất mạng hoặc API không cho phép gọi từ trang này)`);
     } catch (e) {
-      const msg = e && e.message ? e.message : String(e);
-      post({ type: 'replay-result', id, status: 0, error: msg === 'Failed to fetch' ? 'Failed to fetch (mất mạng hoặc bị chặn CORS)' : msg });
+      post({ type: 'replay-result', id, status: 0, error: e && e.message ? e.message : String(e) });
     }
   }
 

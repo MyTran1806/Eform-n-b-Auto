@@ -85,12 +85,14 @@
 
   window.fetch = function (input, init) {
     let entry = null;
+    let write = null; // request ghi dữ liệu: luôn báo kết quả về content.js (bộ tự bấm giao diện dùng để biết lưu thành công hay lỗi)
     try {
       const isReq = typeof Request !== 'undefined' && input instanceof Request;
       const url = new URL(isReq ? input.url : String(input), location.href).href;
       const method = String((init && init.method) || (isReq ? input.method : 'GET')).toUpperCase();
       const headers = Object.assign({}, isReq ? headersToObject(input.headers) : {}, headersToObject(init && init.headers));
       noteHeaders(url, headers);
+      if (!SAFE_METHODS.has(method)) write = { method, url };
       if (recording && !SAFE_METHODS.has(method)) {
         entry = { id: ++seq, method, url, headers, ...describeBody(init && init.body) };
         if (isReq && !(init && init.body)) {
@@ -104,6 +106,12 @@
     p.then((r) => {
       if (/json/i.test(r.headers.get('content-type') || '')) r.clone().text().then(indexText, () => {});
     }, () => {});
+    if (write) {
+      p.then((r) => r.clone().text().then(
+        (text) => post({ type: 'write', ...write, status: r.status, text: text.slice(0, 600) }),
+        () => post({ type: 'write', ...write, status: r.status, text: '' })),
+      () => post({ type: 'write', ...write, status: 0, text: '' }));
+    }
     if (entry) {
       const send = (status) => Promise.resolve(entry.ready).then(() => {
         delete entry.ready;
@@ -141,6 +149,13 @@
             else if (this.responseType === '' || this.responseType === 'text') indexText(this.responseText);
           } catch (e) { /* bỏ qua */ }
         });
+        if (!SAFE_METHODS.has(t.method)) {
+          this.addEventListener('loadend', () => {
+            let text = '';
+            try { text = this.responseType === '' || this.responseType === 'text' ? this.responseText : JSON.stringify(this.response); } catch (e) { /* bỏ qua */ }
+            post({ type: 'write', method: t.method, url, status: this.status, text: String(text || '').slice(0, 600) });
+          });
+        }
         if (recording && !SAFE_METHODS.has(t.method)) {
           const entry = { id: ++seq, method: t.method, url, headers: { ...t.headers }, ...describeBody(body) };
           this.addEventListener('loadend', () => post({ type: 'captured', req: { ...entry, status: this.status } }));

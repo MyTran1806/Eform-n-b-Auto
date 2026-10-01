@@ -15,6 +15,9 @@
     codeRegex: '',
     rowSelector: '',
     checkedSelector: '',
+    mode: 'ui', // 'ui': tự bấm giao diện trang chi tiết (mở tab nền từng ticket); 'api': gửi lại request theo mẫu
+    detailUrl: '/ghn-ticket/cs/detail/{id}?nav=2', // link trang chi tiết, {id} là id nội bộ của ticket
+    foreground: false, // true: mở tab chi tiết ở phía trước (khi chạy nền bị lỗi)
     allowSkipReason: false, // true: ticket thuộc nhóm không có trường lý do vẫn tính là xong (chỉ đổi loại)
   };
 
@@ -153,6 +156,7 @@
   const startBtn = h('button', { class: 'primary', onclick: runBulk }, 'Đổi loại');
   const stopBtn = h('button', { class: 'ghost', hidden: true, onclick: () => { stopRequested = true; } }, 'Dừng');
   const needSetup = h('div', { class: 'warn', hidden: true });
+  const modeInfo = h('div', { class: 'muted' });
   const barFill = h('i');
   const progText = h('div', { class: 'muted' });
   const logBox = h('div', { class: 'log', hidden: true });
@@ -163,6 +167,7 @@
     warn,
     h('label', {}, 'Loại mới', typeSel),
     needSetup,
+    modeInfo,
     h('div', { class: 'row' }, startBtn, stopBtn),
     h('div', { class: 'bar' }, barFill),
     progText,
@@ -219,7 +224,13 @@
   const advMsg = h('div', { class: 'msg' });
 
   const presetMsg = h('div', { class: 'msg' });
+  const modeSel = h('select', { onchange: () => { cfg.mode = modeSel.value; saveCfg(); updateButtons(); } },
+    h('option', { value: 'ui' }, 'Tự bấm giao diện (chậm, giống người dùng thao tác)'),
+    h('option', { value: 'api' }, 'Gọi API theo mẫu (nhanh)'));
+  const detailUrlInput = h('input', { type: 'text', placeholder: '/ghn-ticket/cs/detail/{id}?nav=2' });
+  const foregroundInput = h('input', { type: 'checkbox' });
   const setupPane = h('div', { class: 'pane', hidden: true },
+    h('label', {}, 'Cách chạy', modeSel),
     h('h3', {}, 'Cách nhanh'),
     h('div', { class: 'muted' }, 'Điền sẵn mẫu "Loại = Hồi Giao/Lấy/Trả hàng" kèm lý do (Hồi giao / Hồi lấy / Hồi trả) cho hệ thống CS. Không cần ghi request.'),
     h('button', { class: 'primary', onclick: applyPreset }, 'Điền sẵn cấu hình'),
@@ -245,6 +256,8 @@
     h('details', {},
       h('summary', {}, 'Nâng cao'),
       h('div', { class: 'pane', style: 'padding:8px 0 0' },
+        h('label', {}, 'Link trang chi tiết (chế độ tự bấm; {id} là id nội bộ)', detailUrlInput),
+        h('label', { class: 'check' }, foregroundInput, 'Mở tab chi tiết ở phía trước khi chạy (dùng nếu chạy nền bị lỗi)'),
         h('label', { class: 'check' }, skipReasonInput, 'Nhóm phiếu không có trường lý do: vẫn tính là xong (chỉ đổi loại, bỏ qua lý do)'),
         h('label', {}, 'Coi là lỗi nếu phản hồi khớp regex', failInput),
         h('label', {}, 'Regex mã ticket', codeInput),
@@ -315,9 +328,12 @@
   function updateButtons() {
     const missing = [];
     if (!cfg.types.length) missing.push('danh sách loại');
-    if (!cfg.template) missing.push('mẫu request');
+    if (cfg.mode === 'api' && !cfg.template) missing.push('mẫu request');
     needSetup.hidden = !missing.length;
     needSetup.textContent = missing.length ? `Chưa có ${missing.join(' và ')} — sang tab Cài đặt, bấm "Điền sẵn" để thiết lập.` : '';
+    modeInfo.textContent = cfg.mode === 'ui'
+      ? 'Cách chạy: tự bấm giao diện (mở tab nền cho từng ticket, mỗi ticket vài giây).'
+      : 'Cách chạy: gọi API theo mẫu đã lưu (nhanh).';
     const typeIdx = typeSel.value === '' ? -1 : Number(typeSel.value);
     startBtn.disabled = running || !codes.length || typeIdx < 0 || missing.length > 0;
     startBtn.textContent = typeIdx >= 0 && codes.length ? `Đổi ${codes.length} ticket sang "${cfg.types[typeIdx].label}"` : 'Đổi loại';
@@ -347,14 +363,36 @@
     setProgress();
   }
 
+  function requireId(code) {
+    if (idMap[code] != null) return;
+    throw new Error(idAmbiguous.has(code)
+      ? 'Mã này khớp nhiều id khác nhau trong dữ liệu trang nên bỏ qua để tránh đổi nhầm'
+      : 'Không tìm thấy id nội bộ của ticket này (hãy tải lại danh sách rồi thử lại)');
+  }
+
+  // Chế độ tự bấm: nhờ background mở tab chi tiết của ticket, tab đó tự chọn Loại/Lý do rồi bấm Cập nhật.
+  async function runOneUi(code, type) {
+    let url;
+    try {
+      requireId(code);
+      url = new URL(cfg.detailUrl.replace('{id}', encodeURIComponent(idMap[code])), location.origin).href;
+    } catch (e) {
+      addLog(code, false, e.message);
+      return false;
+    }
+    const res = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'ui-ticket', url, active: cfg.foreground, timeoutMs: 90000, job: { code, loai: type.value, lyDo: type.reason } },
+        (r) => resolve(chrome.runtime.lastError || !r ? { ok: false, note: (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'Không nhận được phản hồi từ extension' } : r));
+    });
+    addLog(code, res.ok, res.note);
+    return res.ok;
+  }
+
   async function runOne(code, type) {
+    if (cfg.mode === 'ui') return runOneUi(code, type);
     let steps;
     try {
-      if (C.placeholdersIn(cfg.template).has('id') && idMap[code] == null) {
-        throw new Error(idAmbiguous.has(code)
-          ? 'Mã này khớp nhiều id khác nhau trong dữ liệu trang nên bỏ qua để tránh đổi nhầm'
-          : 'Không tìm thấy id nội bộ của ticket này (hãy tải lại danh sách rồi thử lại)');
-      }
+      if (C.placeholdersIn(cfg.template).has('id')) requireId(code);
       steps = C.renderSteps(cfg.template, { ticket: code, id: idMap[code], type: type.value, reason: type.reason });
     } catch (e) {
       addLog(code, false, e.message);
@@ -393,7 +431,7 @@
     refreshSelection();
     const type = cfg.types[Number(typeSel.value)];
     const batch = [...codes];
-    if (running || !batch.length || !type || !cfg.template) return;
+    if (running || !batch.length || !type || (cfg.mode === 'api' && !cfg.template)) return;
     if (!(await ensureHook())) {
       warn.hidden = false;
       warn.textContent = 'Extension chưa gắn được vào trang. Hãy tải lại trang (F5) rồi thử lại.';
@@ -402,7 +440,7 @@
     let note = '';
     idMap = {};
     idAmbiguous = new Set();
-    if (C.placeholdersIn(cfg.template).has('id')) {
+    if (cfg.mode === 'ui' || C.placeholdersIn(cfg.template).has('id')) {
       const r = await resolveIds(batch);
       idMap = r.ids;
       idAmbiguous = new Set(r.ambiguous);
@@ -427,7 +465,7 @@
     updateButtons();
 
     if (!(await runOne(batch[0], type))) {
-      finish('Ticket đầu tiên bị lỗi nên đã dừng, chưa đụng tới các ticket còn lại. Kiểm tra lại mẫu ở tab Cài đặt.');
+      finish('Ticket đầu tiên bị lỗi nên đã dừng, chưa đụng tới các ticket còn lại. Xem lý do lỗi bên dưới rồi kiểm tra lại cài đặt.');
       return;
     }
     let next = 1;
@@ -437,7 +475,7 @@
         if (cfg.delayMs) await sleep(cfg.delayMs);
       }
     };
-    await Promise.all(Array.from({ length: Math.max(1, cfg.concurrency) }, worker));
+    await Promise.all(Array.from({ length: cfg.mode === 'ui' ? 1 : Math.max(1, cfg.concurrency) }, worker));
     finish(stopRequested ? 'Đã dừng.' : 'Xong, hãy tải lại danh sách để thấy loại mới.');
   }
 
@@ -592,6 +630,8 @@
     cfg.rowSelector = rowInput.value.trim();
     cfg.checkedSelector = checkedInput.value.trim();
     cfg.allowSkipReason = skipReasonInput.checked;
+    cfg.detailUrl = detailUrlInput.value.trim() || DEFAULTS.detailUrl;
+    cfg.foreground = foregroundInput.checked;
     saveCfg();
     advMsg.className = 'msg ok';
     advMsg.textContent = 'Đã lưu.';
@@ -600,10 +640,25 @@
 
   /* ---------- Khởi động ---------- */
 
+  const getJob = () => new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: 'get-job' }, (r) => resolve(chrome.runtime.lastError || !r ? null : r.job));
+    } catch (e) { resolve(null); }
+  });
+
   toHook({ type: 'ping' });
-  loadCfg().then((stored) => {
+  Promise.all([loadCfg(), getJob()]).then(([stored, job]) => {
     cfg = stored;
+    if (job) {
+      // Tab chi tiết do extension mở cho một ticket: tự thao tác rồi báo kết quả, không hiện panel.
+      window.TTAuto.runJob(job, { evaluate: (res) => C.evaluateResult(res, cfg.failRegex) })
+        .then((result) => chrome.runtime.sendMessage({ type: 'job-result', result }));
+      return;
+    }
     typesTa.value = C.stringifyTypes(cfg.types);
+    modeSel.value = cfg.mode;
+    detailUrlInput.value = cfg.detailUrl;
+    foregroundInput.checked = cfg.foreground;
     concInput.value = cfg.concurrency;
     delayInput.value = cfg.delayMs;
     failInput.value = cfg.failRegex;

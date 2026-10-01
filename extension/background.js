@@ -16,7 +16,7 @@ async function registerFor(origin) {
   const matches = [`${origin}/*`];
   await chrome.scripting.registerContentScripts([
     { id: scriptId(origin, 'hook'), matches, js: ['hook.js'], runAt: 'document_start', world: 'MAIN', persistAcrossSessions: true },
-    { id: scriptId(origin, 'ui'), matches, js: ['core.js', 'content.js'], runAt: 'document_idle', persistAcrossSessions: true },
+    { id: scriptId(origin, 'ui'), matches, js: ['core.js', 'ui-auto.js', 'content.js'], runAt: 'document_idle', persistAcrossSessions: true },
   ]);
 }
 
@@ -42,4 +42,51 @@ chrome.runtime.onInstalled.addListener(async () => {
   for (const o of origins.map(originOf)) {
     if (/^https?:\/\/[^*]+$/.test(o)) await registerFor(o);
   }
+});
+
+/* ---------- Chế độ tự bấm giao diện: mỗi ticket mở một tab chi tiết, tab đó tự thao tác rồi báo kết quả ---------- */
+
+const uiJobs = new Map(); // tabId -> {job, resolve, timer}
+
+function finishJob(tabId, result) {
+  const entry = uiJobs.get(tabId);
+  if (!entry) return;
+  uiJobs.delete(tabId);
+  clearTimeout(entry.timer);
+  chrome.tabs.remove(tabId).catch(() => {});
+  entry.resolve(result);
+}
+
+async function openTicketTab({ url, job, active, timeoutMs }) {
+  const tab = await chrome.tabs.create({ url, active: !!active });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => finishJob(tab.id, { ok: false, note: `Hết thời gian chờ ${Math.round(timeoutMs / 1000)} giây khi thao tác trên trang chi tiết` }), timeoutMs);
+    uiJobs.set(tab.id, { job, resolve, timer });
+  });
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (uiJobs.has(tabId)) finishJob(tabId, { ok: false, note: 'Tab chi tiết bị đóng giữa chừng' });
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'ui-ticket') {
+    // Chỉ mở link cùng origin với trang đang gửi yêu cầu.
+    let allowed = false;
+    try { allowed = new URL(msg.url).origin === new URL(sender.url).origin; } catch (e) { /* không hợp lệ */ }
+    if (!allowed) { sendResponse({ ok: false, note: 'Link trang chi tiết không cùng tên miền với trang danh sách' }); return false; }
+    openTicketTab({ ...msg, timeoutMs: Math.min(Number(msg.timeoutMs) || 90000, 300000) }).then(sendResponse);
+    return true; // trả lời bất đồng bộ
+  }
+  if (msg.type === 'get-job') {
+    const entry = sender.tab && uiJobs.get(sender.tab.id);
+    sendResponse({ job: entry ? entry.job : null });
+    return false;
+  }
+  if (msg.type === 'job-result') {
+    if (sender.tab) finishJob(sender.tab.id, msg.result);
+    sendResponse({});
+    return false;
+  }
+  return false;
 });

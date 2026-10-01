@@ -20,6 +20,55 @@ let summaryOverride = null; // mô phỏng trang báo 'Đã chọn N' khác số
 const ROWS = ['691000001', '691000002', '691000003', '691000004', '691000005'];
 const checkedRows = new Set(['691000001', '691000002', '691000003']);
 
+function detailPage(id) {
+  return `<!doctype html><meta charset="utf-8"><title>Chi tiết</title>
+  <style>
+    body{font:13px sans-serif;margin:0;display:flex} .left{flex:1;padding:20px} .right{width:300px;padding:12px;border-left:1px solid #ddd}
+    .field{margin-bottom:12px} .lbl{color:#666;font-size:12px;margin-bottom:4px}
+    .sel{border:1px solid #ccc;border-radius:6px;padding:8px 10px;display:flex;justify-content:space-between;cursor:pointer;height:36px;box-sizing:border-box}
+    .pop{position:absolute;background:#fff;border:1px solid #ccc;width:276px;z-index:50} .pop ul{margin:0;padding:0} .pop li{list-style:none;padding:8px;cursor:pointer}
+    .foot{margin-top:20px;display:flex;gap:8px}
+  </style>
+  <div class="left"><h3>Tiến trình xử lý</h3><p>Khách phản ánh: loại hàng bị hỏng, xin lý do hoàn.</p></div>
+  <div class="right">
+    <div class="field"><div class="lbl">Nhân viên phụ trách (*)</div><div class="sel"><span>B2C_V3</span></div></div>
+    <div class="field"><div class="lbl">Loại</div><div class="sel" id="loai"><span>Khiếu nại</span><i>⌄</i></div></div>
+    <div id="slot"></div>
+    <div class="foot"><button>Bỏ qua thay đổi</button><button id="save">Cập nhật</button><button id="arrow">▾</button></div>
+  </div>
+  <script>
+    const state = { loai: 'Khiếu nại', lyDo: null };
+    fetch('${apiOrigin}/api/list', { headers: { Token: '${TOKEN}', 'X-Shop': '7' } });
+    function dropdown(el, options, onPick) {
+      el.onclick = () => {
+        const open = document.querySelector('.pop');
+        if (open) { open.remove(); return; }
+        const r = el.getBoundingClientRect();
+        const pop = document.createElement('div');
+        pop.className = 'pop';
+        pop.style.left = r.left + 'px'; pop.style.top = (r.bottom + scrollY) + 'px';
+        pop.innerHTML = '<ul>' + options.map((o) => '<li>' + o + '</li>').join('') + '</ul>';
+        pop.onclick = (e) => { if (e.target.tagName === 'LI') { el.querySelector('span').textContent = e.target.textContent; pop.remove(); onPick(e.target.textContent); } };
+        document.body.append(pop);
+      };
+    }
+    dropdown(document.getElementById('loai'), ['Hồi Giao/Lấy/Trả hàng', 'Khiếu nại', 'Tư vấn'], (v) => {
+      state.loai = v;
+      document.getElementById('slot').innerHTML = '';
+      if (v.startsWith('Hồi')) setTimeout(() => { // giống giao diện thật: gọi field-config rồi mới hiện ô lý do
+        document.getElementById('slot').innerHTML = '<div class="field"><div class="lbl">Lý do Hồi Giao/Lấy/Trả</div><div class="sel" id="lydo"><span>Chọn lý do</span><i>⌄</i></div></div>';
+        dropdown(document.getElementById('lydo'), ['Hồi giao', 'Hồi lấy', 'Hồi trả', 'Hủy đơn', 'Khiếu nại', 'Kích hoạt giao lại đơn hàng'], (x) => { state.lyDo = x; });
+      }, 300);
+    });
+    document.getElementById('save').onclick = () => {
+      const cf = { type: state.loai };
+      if (state.lyDo) cf.ly_do_hoi_giao_lay_tra = state.lyDo;
+      fetch('${apiOrigin}/cs-ticket/update', { method: 'POST', headers: { 'Content-Type': 'application/json', Token: '${TOKEN}' },
+        body: JSON.stringify({ id: ${Number(id)}, custom_fields: cf }) });
+    };
+  </script>`;
+}
+
 function page(variant) {
   const checkbox = (code) => {
     const on = checkedRows.has(code);
@@ -80,8 +129,8 @@ const apiServer = http.createServer((req, res) => {
       if (req.headers.token !== TOKEN) { res.writeHead(401, cors).end('{"error":"unauthorized"}'); return; }
       // Luật thật: lý do Hồi giao/lấy/trả chỉ sửa được khi ticket ĐÃ thuộc loại đó (kiểm tra trên trạng thái trước request).
       const { id, custom_fields: cf = {} } = JSON.parse(body);
-      const current = ticketType.get(id) || 'Khiếu nại';
-      if ('ly_do_hoi_giao_lay_tra' in cf && (current !== 'Hồi Giao/Lấy/Trả hàng' || noReasonGroup.has(id))) {
+      const effective = cf.type || ticketType.get(id) || 'Khiếu nại';
+      if ('ly_do_hoi_giao_lay_tra' in cf && (effective !== 'Hồi Giao/Lấy/Trả hàng' || noReasonGroup.has(id))) {
         res.writeHead(400, { ...cors, 'content-type': 'application/json' }).end('{"code":400,"message":"field không được phép sửa theo cấu hình nhóm phiếu: ly_do_hoi_giao_lay_tra"}');
         return;
       }
@@ -106,6 +155,8 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }).end('{"success":true}');
       return;
     }
+    const detail = /^\/ghn-ticket\/cs\/detail\/(\d+)/.exec(req.url);
+    if (detail) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(detailPage(detail[1])); return; }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page(req.url.startsWith('/aria') ? 'aria' : 'input'));
   });
 });
@@ -123,6 +174,14 @@ function prepareExtension() {
 }
 
 /* ---------- Test ---------- */
+
+const waitUntil = async (cond, ms, what) => {
+  const t0 = Date.now();
+  while (!(await cond())) {
+    assert.ok(Date.now() - t0 < ms, `hết thời gian chờ: ${what}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+};
 
 let passed = 0;
 const step = async (name, fn) => {
@@ -173,7 +232,7 @@ const step = async (name, fn) => {
     });
 
     await step('chưa cài đặt thì nút chạy bị khóa và báo thiếu gì', async () => {
-      await $('text=Chưa có danh sách loại và mẫu request').waitFor();
+      await $('text=Chưa có danh sách loại').waitFor();
       assert.equal(await $('button.primary:has-text("Đổi loại")').first().isDisabled(), true);
     });
 
@@ -185,6 +244,14 @@ const step = async (name, fn) => {
       await $('textarea').first().fill('Khiếu nại | complaint\nHồi giao/lấy/trả hàng | return');
       await $('button:has-text("Lưu danh sách loại")').click();
       await $('text=Đã lưu 2 loại.').waitFor();
+    });
+
+    await step('mặc định là tự bấm giao diện; đổi sang gọi API cho các bước dưới', async () => {
+      assert.match(await $('text=Cách chạy: tự bấm giao diện').innerText(), /tự bấm giao diện/);
+      await $('label:has-text("Cách chạy") select').selectOption('api');
+      await $('.tab:has-text("Đổi loại")').click();
+      await $('text=Cách chạy: gọi API').waitFor();
+      await $('.tab:has-text("Cài đặt")').click();
     });
 
     await step('ghi lại request fetch, tự đoán mã ticket, tạo mẫu', async () => {
@@ -341,6 +408,56 @@ const step = async (name, fn) => {
       await $('text=691000005 — Không tìm thấy id nội bộ').waitFor();
       assert.equal(updates.length, 6);
       checkedRows.delete('691000005');
+    });
+
+    await step('tự bấm giao diện: mỗi ticket mở tab chi tiết, chọn Loại + Lý do, bấm Cập nhật, rồi đóng tab', async () => {
+      await p.reload();
+      await $('.launcher').click();
+      await $('text=Đã tick: 3 ticket').waitFor();
+      await $('.tab:has-text("Cài đặt")').click();
+      await $('label:has-text("Cách chạy") select').selectOption('ui');
+      await $('.tab:has-text("Đổi loại")').click();
+      updates.length = 0;
+      ticketType.clear();
+      const pagesBefore = ctx.pages().length;
+      await $('select').first().selectOption({ label: 'Hồi lấy' });
+      await $('button:has-text("Đổi 3 ticket sang")').click();
+      await waitUntil(() => updates.length >= 3, 60000, 'server nhận đủ 3 lần lưu từ giao diện');
+      await waitUntil(async () => (await $('.log div:has-text("cập nhật OK")').count()) === 3, 15000, '3 dòng log thành công');
+      assert.deepEqual(updates.map((u) => JSON.parse(u.body)).sort((a, b) => a.id - b.id), [4900001, 4900002, 4900003].map((id) => ({
+        id, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' },
+      })));
+      await waitUntil(() => ctx.pages().length === pagesBefore, 10000, 'các tab chi tiết đã đóng');
+    });
+
+    await step('tự bấm giao diện: server từ chối thì báo đúng lý do, ticket đầu lỗi thì dừng', async () => {
+      noReasonGroup.add(4900001);
+      updates.length = 0;
+      ticketType.clear();
+      await $('select').first().selectOption({ label: 'Hồi giao' });
+      await $('button:has-text("Đổi 3 ticket sang")').click();
+      await $('.log div:has-text("không được phép sửa theo cấu hình nhóm phiếu")').waitFor({ timeout: 60000 });
+      await $('text=Ticket đầu tiên bị lỗi nên đã dừng').waitFor();
+      assert.equal(updates.length, 1);
+      noReasonGroup.clear();
+    });
+
+    await step('tự bấm giao diện: lý do không có trong dropdown thì liệt kê những gì đang thấy', async () => {
+      await $('.tab:has-text("Cài đặt")').click();
+      await $('textarea').first().fill('Thử | Hồi Giao/Lấy/Trả hàng | Lý do không tồn tại');
+      await $('button:has-text("Lưu danh sách loại")').click();
+      await $('text=Đã lưu 1 loại.').waitFor();
+      await $('.tab:has-text("Đổi loại")').click();
+      updates.length = 0;
+      await $('select').first().selectOption({ label: 'Thử' });
+      await $('button:has-text("Đổi 3 ticket sang")').click();
+      await $('.log div:has-text("Không thấy lựa chọn")').waitFor({ timeout: 60000 });
+      await $('.log div:has-text("Lý do không tồn tại")').waitFor();
+      await $('.log div:has-text("Đang thấy: Hồi giao | Hồi lấy | Hồi trả")').waitFor();
+      assert.equal(updates.length, 0);
+      await $('.tab:has-text("Cài đặt")').click();
+      await $('button:has-text("Điền sẵn cấu hình")').click(); // trả lại danh sách loại chuẩn
+      await $('text=Đã điền sẵn.').waitFor();
     });
 
     await step('chọn ô theo role=checkbox/aria-checked + class "-checked" cũng đọc được', async () => {

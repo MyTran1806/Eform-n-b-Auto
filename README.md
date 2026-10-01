@@ -5,6 +5,16 @@ Bạn tick ticket như bình thường, chọn loại mới, bấm một lần. 
 
 Extension không biết trước API của hệ thống, nên bạn **thao tác tay đổi loại 1 ticket một lần để nó học request**, sau đó nó lặp lại cho các ticket khác.
 
+## Hai cách chạy (Cài đặt → Cách chạy)
+
+- **Tự bấm giao diện (mặc định):** với mỗi ticket đã tick, extension mở tab nền của trang chi tiết
+  (`/ghn-ticket/cs/detail/<id>`), chọn **Loại**, chọn **Lý do**, bấm **Cập nhật**, chờ kết quả lưu rồi đóng tab.
+  Chậm hơn (vài giây mỗi ticket) nhưng làm đúng như người dùng nên không phải biết API.
+  Cần danh sách loại ở Cài đặt (bấm **Điền sẵn cấu hình** để có 3 dòng Hồi giao / Hồi lấy / Hồi trả).
+  Nếu chạy nền bị lỗi, bật *Mở tab chi tiết ở phía trước* ở Cài đặt → Nâng cao.
+  Khi lỗi, thông báo liệt kê những gì extension đang thấy trên trang (các lựa chọn của dropdown, thông báo lỗi) để chỉnh.
+- **Gọi API theo mẫu:** nhanh, nhưng phải biết đúng chuỗi request (xem phần thiết lập bên dưới).
+
 ## Cài đặt
 
 1. Mở `chrome://extensions` (Chrome hoặc Edge), bật **Developer mode**.
@@ -74,4 +84,5 @@ Cấu trúc `extension/`:
 | `manifest.json`, `background.js`, `popup.*` | Bật/tắt extension theo từng trang (đăng ký script khi được cấp quyền) |
 | `hook.js` | Chạy trong trang: ghi request, nhớ token mới nhất, gọi lại request theo mẫu |
 | `content.js` | Giao diện góc phải dưới, luồng ghi → lưu mẫu → chạy hàng loạt |
+| `ui-auto.js` | Tự bấm trang chi tiết: chọn Loại/Lý do, bấm Cập nhật, chờ kết quả lưu |
 | `core.js` | Logic thuần: dựng/điền mẫu, đọc ticket đã tick (có unit test) |

@@ -192,6 +192,9 @@ const step = async (name, fn) => {
       await p.waitForTimeout(200);
       await p.evaluate(() => document.getElementById('sim-fetch').click());
       await $('.cap:has-text("POST")').waitFor();
+      // Xem được nội dung gửi đi ngay trong panel, và có nút sao chép (không gồm token).
+      assert.match(await $('.cap-body').first().textContent(), /"ticket":"691000001"/);
+      await $('button:has-text("Sao chép tất cả request đã ghi")').waitFor();
       await $('.cap:has-text("POST")').click();
       assert.equal(await $('input[placeholder^="Ví dụ 6910"]').inputValue(), '691000001');
       await $('input[placeholder^="Ví dụ complaint"]').fill('complaint');

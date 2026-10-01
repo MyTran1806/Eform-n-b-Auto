@@ -137,6 +137,7 @@
     .cap { text-align: left; padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px; word-break: break-all; }
     .cap.on { border-color: #f26522; background: #fff4ec; }
     .cap:disabled { opacity: .5; cursor: default; }
+    .cap-body { margin: 4px 0 0; padding: 6px; background: #f7f7f7; border-radius: 6px; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow: auto; }
     .form { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px dashed #ccc; border-radius: 6px; }
     label { font-size: 12px; color: #444; display: flex; flex-direction: column; gap: 3px; }
     details summary { cursor: pointer; font-size: 12.5px; color: #444; }
@@ -177,6 +178,7 @@
   const recordBtn = h('button', { class: 'primary', onclick: toggleRecord }, 'Bắt đầu ghi');
   const recHint = h('div', { class: 'muted', hidden: true });
   const capList = h('div', { class: 'caps' });
+  const copyCapsBtn = h('button', { class: 'link', hidden: true, onclick: copyCaptures }, '');
   const capTicket = h('input', { type: 'text', placeholder: 'Ví dụ 691002569352' });
   const capType = h('input', { type: 'text', placeholder: 'Ví dụ complaint (bỏ trống nếu chưa đổi loại)' });
   const capMsg = h('div', { class: 'msg' });
@@ -233,6 +235,7 @@
     recordBtn,
     recHint,
     capList,
+    copyCapsBtn,
     capForm,
     editor,
     h('h3', {}, '3. Tốc độ & nâng cao'),
@@ -489,9 +492,21 @@
       let path = req.url;
       try { const u = new URL(req.url); path = u.host + u.pathname + u.search; } catch (e) { /* giữ nguyên */ }
       const label = `${req.method} ${path.length > 70 ? `${path.slice(0, 70)}…` : path} · ${req.status || 'lỗi'}`;
-      if (req.unsupported) return h('button', { class: 'cap', disabled: true }, `${label} (body ${req.unsupported} chưa hỗ trợ)`);
-      return h('button', { class: `cap${picked === req ? ' on' : ''}`, onclick: () => pickCapture(req) }, label);
+      const body = h('details', {}, h('summary', { class: 'muted' }, 'Xem nội dung gửi đi'),
+        h('pre', { class: 'cap-body' }, req.body == null ? '(không có body)' : req.body.slice(0, 4000)));
+      if (req.unsupported) return h('div', {}, h('button', { class: 'cap', disabled: true }, `${label} (body ${req.unsupported} chưa hỗ trợ)`), body);
+      return h('div', {}, h('button', { class: `cap${picked === req ? ' on' : ''}`, onclick: () => pickCapture(req) }, label), body);
     }));
+    copyCapsBtn.hidden = !captured.length;
+    copyCapsBtn.textContent = 'Sao chép tất cả request đã ghi (không gồm token)';
+  }
+
+  // Chỉ method, URL, mã trả về và body; không kèm header nên không lộ token.
+  function copyCaptures() {
+    const text = captured.map((r, i) => `#${i + 1} ${r.method} ${r.url} -> ${r.status}\n${r.body == null ? '(không có body)' : r.body}`).join('\n\n');
+    navigator.clipboard.writeText(text).then(
+      () => { copyCapsBtn.textContent = `Đã sao chép ${captured.length} request`; },
+      () => { copyCapsBtn.textContent = 'Không sao chép được, hãy mở từng request và copy tay'; });
   }
 
   function pickCapture(req) {

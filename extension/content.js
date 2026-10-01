@@ -355,7 +355,12 @@
     }
     let last;
     for (let i = 0; i < steps.length; i++) {
-      last = C.evaluateResult(await replay(steps[i]), cfg.failRegex);
+      const res = await replay(steps[i]);
+      last = C.evaluateResult(res, cfg.failRegex);
+      if (!last.ok && i > 0 && cfg.template.followUpSkipRegex && skipMatches(cfg.template.followUpSkipRegex, res.text)) {
+        addLog(code, true, 'đã đổi loại; bỏ qua lý do vì nhóm phiếu này không có trường lý do');
+        return true;
+      }
       if (!last.ok) {
         const where = steps.length > 1 ? `Bước ${i + 1}/${steps.length} lỗi${i > 0 ? ' (các bước trước đã áp dụng)' : ''}: ` : '';
         addLog(code, false, where + last.note);
@@ -364,6 +369,10 @@
     }
     addLog(code, true, steps.length > 1 ? `${steps.length} bước OK · ${last.note}` : last.note);
     return true;
+  }
+
+  function skipMatches(source, text) {
+    try { return new RegExp(source).test(text || ''); } catch (e) { return false; }
   }
 
   function finish(message) {
@@ -502,6 +511,7 @@
   }
 
   let editorDynamic = [];
+  let editorSkipRegex = '';
 
   function openEditor(tpl, note) {
     edNote.textContent = note;
@@ -514,6 +524,7 @@
       : '';
     edBody.value = tpl.body == null ? '' : tpl.body;
     edBody2.value = tpl.followUpBody || '';
+    editorSkipRegex = tpl.followUpSkipRegex || '';
     edMsg.textContent = '';
     editor.hidden = false;
   }
@@ -532,7 +543,10 @@
       dynamicHeaders: editorDynamic,
       body: edBody.value === '' ? null : edBody.value,
     };
-    if (edBody2.value.trim()) tpl.followUpBody = edBody2.value.trim();
+    if (edBody2.value.trim()) {
+      tpl.followUpBody = edBody2.value.trim();
+      if (editorSkipRegex) tpl.followUpSkipRegex = editorSkipRegex;
+    }
     if (!tpl.url) { edMsg.textContent = 'Thiếu URL.'; return; }
     const used = C.placeholdersIn(tpl);
     if (!used.has('ticket') && !used.has('id')) { edMsg.textContent = 'Mẫu chưa có {{ticket}} (hoặc {{id}}) ở URL hoặc body nên sẽ gửi y hệt cho mọi ticket.'; return; }

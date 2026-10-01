@@ -106,4 +106,5 @@ test('presetGhn render ra body đúng như request thật (id số, loại + lý
   assert.deepEqual([...C.placeholdersIn(template)].sort(), ['id', 'type']);
   // loại không có lý do thì chỉ còn bước 1
   assert.equal(C.renderSteps(template, { id: 1, type: 'x' }).length, 1);
+  assert.ok(new RegExp(template.followUpSkipRegex).test('field không được phép sửa theo cấu hình nhóm phiếu: ly_do_hoi_giao_lay_tra'));
 });

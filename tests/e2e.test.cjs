@@ -51,6 +51,7 @@ function page(variant) {
 }
 
 let apiOrigin = '';
+const noReasonGroup = new Set([4900003]); // nhóm phiếu không có trường lý do (như nhóm "Vùng 3")
 const ticketType = new Map(); // id -> loại hiện tại (mô phỏng luật của hệ thống thật)
 let rejectExtraHeader = false; // true: preflight của /cs-ticket/update từ chối header X-Extra mà trang vẫn hay gửi
 
@@ -80,7 +81,7 @@ const apiServer = http.createServer((req, res) => {
       // Luật thật: lý do Hồi giao/lấy/trả chỉ sửa được khi ticket ĐÃ thuộc loại đó (kiểm tra trên trạng thái trước request).
       const { id, custom_fields: cf = {} } = JSON.parse(body);
       const current = ticketType.get(id) || 'Khiếu nại';
-      if ('ly_do_hoi_giao_lay_tra' in cf && current !== 'Hồi Giao/Lấy/Trả hàng') {
+      if ('ly_do_hoi_giao_lay_tra' in cf && (current !== 'Hồi Giao/Lấy/Trả hàng' || noReasonGroup.has(id))) {
         res.writeHead(400, { ...cors, 'content-type': 'application/json' }).end('{"code":400,"message":"field không được phép sửa theo cấu hình nhóm phiếu: ly_do_hoi_giao_lay_tra"}');
         return;
       }
@@ -282,6 +283,9 @@ const step = async (name, fn) => {
         ]);
       }
       await $('text=2 bước OK').first().waitFor();
+      // Ticket 3 thuộc nhóm không có trường lý do: loại đã đổi, bước 2 bị từ chối nhưng vẫn tính là xong và có ghi chú.
+      await $('text=691000003 — đã đổi loại; bỏ qua lý do').waitFor();
+      await $('text=Thành công 3/3, lỗi 0').waitFor();
       for (const u of updates) assert.equal(u.headers['content-type'], 'application/json');
       // API chỉ gửi ACAO "*" (không cho cookie): vẫn thành công và mang đủ header trang đang dùng.
       for (const u of updates) { assert.equal(u.headers['x-shop'], '7'); assert.equal(u.headers['x-extra'], '1'); }

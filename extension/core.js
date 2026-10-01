@@ -162,6 +162,8 @@
         // Bước 1 đổi loại; bước 2 đặt lý do (trường này chỉ sửa được sau khi ticket đã thuộc loại Hồi Giao/Lấy/Trả).
         body: '{"id":{{id}},"custom_fields":{"type":"{{type}}"}}',
         followUpBody: '{"id":{{id}},"custom_fields":{"type":"{{type}}","ly_do_hoi_giao_lay_tra":"{{reason}}"}}',
+        // Nhóm phiếu không có trường lý do (vd "Vùng 3") thì server từ chối bước 2: coi như xong, chỉ ghi chú.
+        followUpSkipRegex: 'không được phép sửa theo cấu hình nhóm phiếu',
       },
     };
   }

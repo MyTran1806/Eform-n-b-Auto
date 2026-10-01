@@ -283,9 +283,26 @@ const step = async (name, fn) => {
         ]);
       }
       await $('text=2 bước OK').first().waitFor();
-      // Ticket 3 thuộc nhóm không có trường lý do: loại đã đổi, bước 2 bị từ chối nhưng vẫn tính là xong và có ghi chú.
+      // Mặc định nghiêm ngặt: ticket 3 thuộc nhóm không có trường lý do -> lỗi ở bước 2, không được tính là xong.
+      await $('text=691000003 — Bước 2/2 lỗi (đã đổi loại nhưng chưa đặt được lý do)').waitFor();
+      await $('text=Thành công 2/3, lỗi 1').waitFor();
+      assert.equal(await $('button:has-text("Sao chép mã ticket lỗi")').count(), 1);
+    });
+
+    await step('bật "vẫn tính là xong" thì ticket nhóm không có lý do chỉ đổi loại và có ghi chú', async () => {
+      await $('.tab:has-text("Cài đặt")').click();
+      await $('summary:has-text("Nâng cao")').click();
+      await $('label:has-text("Nhóm phiếu không có trường lý do") input').check();
+      await $('button:has-text("Lưu cài đặt")').click();
+      await $('text=Đã lưu.').waitFor();
+      await $('.tab:has-text("Đổi loại")').click();
+      updates.length = 0;
+      ticketType.clear();
+      await $('select').first().selectOption({ label: 'Hồi lấy' });
+      await $('button:has-text("Đổi 3 ticket sang")').click();
       await $('text=691000003 — đã đổi loại; bỏ qua lý do').waitFor();
       await $('text=Thành công 3/3, lỗi 0').waitFor();
+      noReasonGroup.clear(); // các bước sau dùng ticket bình thường
       for (const u of updates) assert.equal(u.headers['content-type'], 'application/json');
       // API chỉ gửi ACAO "*" (không cho cookie): vẫn thành công và mang đủ header trang đang dùng.
       for (const u of updates) { assert.equal(u.headers['x-shop'], '7'); assert.equal(u.headers['x-extra'], '1'); }

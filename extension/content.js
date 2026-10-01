@@ -15,6 +15,7 @@
     codeRegex: '',
     rowSelector: '',
     checkedSelector: '',
+    allowSkipReason: false, // true: ticket thuộc nhóm không có trường lý do vẫn tính là xong (chỉ đổi loại)
   };
 
   let cfg = { ...DEFAULTS };
@@ -121,6 +122,7 @@
     button:disabled { opacity: .45; cursor: default; }
     .row { display: flex; gap: 8px; align-items: center; }
     .row > * { flex: 1; }
+    label.check { flex-direction: row; align-items: flex-start; gap: 6px; }
     .between { display: flex; justify-content: space-between; align-items: center; }
     .muted { color: #777; font-size: 12px; }
     .warn { padding: 8px; border-radius: 6px; background: #fff4e5; color: #8a4b00; font-size: 12px; }
@@ -211,6 +213,7 @@
   const codeInput = h('input', { type: 'text', placeholder: String.raw`\b\d{9,15}\b` });
   const rowInput = h('input', { type: 'text', placeholder: 'Ví dụ tr.ant-table-row' });
   const checkedInput = h('input', { type: 'text', placeholder: 'Ví dụ input[type=checkbox]:checked' });
+  const skipReasonInput = h('input', { type: 'checkbox' });
   const advMsg = h('div', { class: 'msg' });
 
   const presetMsg = h('div', { class: 'msg' });
@@ -239,6 +242,7 @@
     h('details', {},
       h('summary', {}, 'Nâng cao'),
       h('div', { class: 'pane', style: 'padding:8px 0 0' },
+        h('label', { class: 'check' }, skipReasonInput, 'Nhóm phiếu không có trường lý do: vẫn tính là xong (chỉ đổi loại, bỏ qua lý do)'),
         h('label', {}, 'Coi là lỗi nếu phản hồi khớp regex', failInput),
         h('label', {}, 'Regex mã ticket', codeInput),
         h('label', {}, 'CSS selector của dòng (nếu không tự đọc được)', rowInput),
@@ -357,12 +361,12 @@
     for (let i = 0; i < steps.length; i++) {
       const res = await replay(steps[i]);
       last = C.evaluateResult(res, cfg.failRegex);
-      if (!last.ok && i > 0 && cfg.template.followUpSkipRegex && skipMatches(cfg.template.followUpSkipRegex, res.text)) {
+      if (!last.ok && i > 0 && cfg.allowSkipReason && cfg.template.followUpSkipRegex && skipMatches(cfg.template.followUpSkipRegex, res.text)) {
         addLog(code, true, 'đã đổi loại; bỏ qua lý do vì nhóm phiếu này không có trường lý do');
         return true;
       }
       if (!last.ok) {
-        const where = steps.length > 1 ? `Bước ${i + 1}/${steps.length} lỗi${i > 0 ? ' (các bước trước đã áp dụng)' : ''}: ` : '';
+        const where = steps.length > 1 ? `Bước ${i + 1}/${steps.length} lỗi${i > 0 ? ' (đã đổi loại nhưng chưa đặt được lý do)' : ''}: ` : '';
         addLog(code, false, where + last.note);
         return false;
       }
@@ -572,6 +576,7 @@
     cfg.codeRegex = codeInput.value.trim();
     cfg.rowSelector = rowInput.value.trim();
     cfg.checkedSelector = checkedInput.value.trim();
+    cfg.allowSkipReason = skipReasonInput.checked;
     saveCfg();
     advMsg.className = 'msg ok';
     advMsg.textContent = 'Đã lưu.';
@@ -590,6 +595,7 @@
     codeInput.value = cfg.codeRegex;
     rowInput.value = cfg.rowSelector;
     checkedInput.value = cfg.checkedSelector;
+    skipReasonInput.checked = cfg.allowSkipReason;
     renderTypeOptions();
     renderTemplateInfo();
     updateButtons();

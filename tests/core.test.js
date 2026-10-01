@@ -98,8 +98,12 @@ test('evaluateResult', () => {
 test('presetGhn render ra body đúng như request thật (id số, loại + lý do là chữ)', () => {
   const { types, template } = C.presetGhn();
   assert.deepEqual(types.map((x) => x.label), ['Hồi giao', 'Hồi lấy', 'Hồi trả']);
-  const req = C.renderTemplate(template, { id: 4914047, type: types[1].value, reason: types[1].reason });
-  assert.equal(req.url, 'https://cm-gateway.ghn.vn/ticket-connector/public-api/web/cs-ticket/update');
-  assert.deepEqual(JSON.parse(req.body), { id: 4914047, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' } });
-  assert.deepEqual([...C.placeholdersIn(template)].sort(), ['id', 'reason', 'type']);
+  const [step1, step2] = C.renderSteps(template, { id: 4914047, type: types[1].value, reason: types[1].reason });
+  assert.equal(step1.url, 'https://cm-gateway.ghn.vn/ticket-connector/public-api/web/cs-ticket/update');
+  assert.equal(step2.url, step1.url);
+  assert.deepEqual(JSON.parse(step1.body), { id: 4914047, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng' } });
+  assert.deepEqual(JSON.parse(step2.body), { id: 4914047, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' } });
+  assert.deepEqual([...C.placeholdersIn(template)].sort(), ['id', 'type']);
+  // loại không có lý do thì chỉ còn bước 1
+  assert.equal(C.renderSteps(template, { id: 1, type: 'x' }).length, 1);
 });

@@ -189,6 +189,7 @@
   const edHeaders = h('textarea', { rows: 3 });
   const edDynamic = h('div', { class: 'muted' });
   const edBody = h('textarea', { rows: 6 });
+  const edBody2 = h('textarea', { rows: 4 });
   const edNote = h('div', { class: 'muted' });
   const edMsg = h('div', { class: 'msg' });
   const editor = h('div', { class: 'form', hidden: true },
@@ -197,7 +198,8 @@
     h('label', {}, 'URL (dùng {{ticket}} và {{type}})', edUrl),
     h('label', {}, 'Header (mỗi dòng "Tên: giá trị")', edHeaders),
     edDynamic,
-    h('label', {}, 'Body (dùng {{ticket}} và {{type}})', edBody),
+    h('label', {}, 'Body (dùng {{ticket}}, {{id}}, {{type}}, {{reason}})', edBody),
+    h('label', {}, 'Body bước 2 (không bắt buộc; gửi sau khi bước 1 thành công, cùng URL)', edBody2),
     h('div', { class: 'row' },
       h('button', { class: 'primary', onclick: saveTemplate }, 'Lưu mẫu'),
       h('button', { class: 'ghost', onclick: () => { editor.hidden = true; } }, 'Đóng')),
@@ -318,7 +320,7 @@
 
   function renderTemplateInfo() {
     const t = cfg.template;
-    tplInfo.textContent = t ? `Đã lưu: ${t.method} ${t.url}` : 'Chưa có mẫu. Bấm "Bắt đầu ghi", rồi đổi loại 1 ticket trên trang như bình thường.';
+    tplInfo.textContent = t ? `Đã lưu: ${t.method} ${t.url}${t.followUpBody ? ' (+ bước 2)' : ''}` : 'Chưa có mẫu. Bấm "Bắt đầu ghi", rồi đổi loại 1 ticket trên trang như bình thường.';
     editTplBtn.hidden = !t;
   }
 
@@ -339,21 +341,29 @@
   }
 
   async function runOne(code, type) {
-    let req;
+    let steps;
     try {
       if (C.placeholdersIn(cfg.template).has('id') && idMap[code] == null) {
         throw new Error(idAmbiguous.has(code)
           ? 'Mã này khớp nhiều id khác nhau trong dữ liệu trang nên bỏ qua để tránh đổi nhầm'
           : 'Không tìm thấy id nội bộ của ticket này (hãy tải lại danh sách rồi thử lại)');
       }
-      req = C.renderTemplate(cfg.template, { ticket: code, id: idMap[code], type: type.value, reason: type.reason });
+      steps = C.renderSteps(cfg.template, { ticket: code, id: idMap[code], type: type.value, reason: type.reason });
     } catch (e) {
       addLog(code, false, e.message);
       return false;
     }
-    const { ok, note } = C.evaluateResult(await replay(req), cfg.failRegex);
-    addLog(code, ok, note);
-    return ok;
+    let last;
+    for (let i = 0; i < steps.length; i++) {
+      last = C.evaluateResult(await replay(steps[i]), cfg.failRegex);
+      if (!last.ok) {
+        const where = steps.length > 1 ? `Bước ${i + 1}/${steps.length} lỗi${i > 0 ? ' (các bước trước đã áp dụng)' : ''}: ` : '';
+        addLog(code, false, where + last.note);
+        return false;
+      }
+    }
+    addLog(code, true, steps.length > 1 ? `${steps.length} bước OK · ${last.note}` : last.note);
+    return true;
   }
 
   function finish(message) {
@@ -503,6 +513,7 @@
       ? `Header lấy tự động từ trang lúc chạy (không lưu giá trị): ${editorDynamic.join(', ')}`
       : '';
     edBody.value = tpl.body == null ? '' : tpl.body;
+    edBody2.value = tpl.followUpBody || '';
     edMsg.textContent = '';
     editor.hidden = false;
   }
@@ -521,6 +532,7 @@
       dynamicHeaders: editorDynamic,
       body: edBody.value === '' ? null : edBody.value,
     };
+    if (edBody2.value.trim()) tpl.followUpBody = edBody2.value.trim();
     if (!tpl.url) { edMsg.textContent = 'Thiếu URL.'; return; }
     const used = C.placeholdersIn(tpl);
     if (!used.has('ticket') && !used.has('id')) { edMsg.textContent = 'Mẫu chưa có {{ticket}} (hoặc {{id}}) ở URL hoặc body nên sẽ gửi y hệt cho mọi ticket.'; return; }

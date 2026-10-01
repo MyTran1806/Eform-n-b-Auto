@@ -51,6 +51,7 @@ function page(variant) {
 }
 
 let apiOrigin = '';
+const ticketType = new Map(); // id -> loại hiện tại (mô phỏng luật của hệ thống thật)
 let rejectExtraHeader = false; // true: preflight của /cs-ticket/update từ chối header X-Extra mà trang vẫn hay gửi
 
 // API khác origin với trang (như cm-gateway.ghn.vn): CORS ACAO "*" (không cho cookie) và preflight chỉ cho vài header.
@@ -76,6 +77,14 @@ const apiServer = http.createServer((req, res) => {
     if (req.url === '/cs-ticket/update') {
       updates.push({ headers: req.headers, body });
       if (req.headers.token !== TOKEN) { res.writeHead(401, cors).end('{"error":"unauthorized"}'); return; }
+      // Luật thật: lý do Hồi giao/lấy/trả chỉ sửa được khi ticket ĐÃ thuộc loại đó (kiểm tra trên trạng thái trước request).
+      const { id, custom_fields: cf = {} } = JSON.parse(body);
+      const current = ticketType.get(id) || 'Khiếu nại';
+      if ('ly_do_hoi_giao_lay_tra' in cf && current !== 'Hồi Giao/Lấy/Trả hàng') {
+        res.writeHead(400, { ...cors, 'content-type': 'application/json' }).end('{"code":400,"message":"field không được phép sửa theo cấu hình nhóm phiếu: ly_do_hoi_giao_lay_tra"}');
+        return;
+      }
+      if (cf.type) ticketType.set(id, cf.type);
       res.writeHead(200, { ...cors, 'content-type': 'application/json' }).end('{"success":true}');
       return;
     }
@@ -259,14 +268,20 @@ const step = async (name, fn) => {
       await $('button:has-text("Lưu mẫu")').click();
       await $('.tab:has-text("Đổi loại")').click();
       updates.length = 0;
+      ticketType.clear();
       await $('select').first().selectOption({ label: 'Hồi lấy' });
       await $('button:has-text("Đổi 3 ticket sang")').click();
       await $('text=Xong, hãy tải lại danh sách').waitFor();
-      assert.equal(updates.length, 3);
-      const sent = updates.map((u) => JSON.parse(u.body)).sort((a, b) => a.id - b.id);
-      assert.deepEqual(sent, [4900001, 4900002, 4900003].map((id) => ({
-        id, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' },
-      })));
+      // Mỗi ticket 2 request: bước 1 đổi loại, bước 2 đặt lý do (gửi cả hai cùng lúc sẽ bị server từ chối với ticket Khiếu nại).
+      assert.equal(updates.length, 6);
+      for (const id of [4900001, 4900002, 4900003]) {
+        const mine = updates.map((u) => JSON.parse(u.body)).filter((b) => b.id === id);
+        assert.deepEqual(mine, [
+          { id, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng' } },
+          { id, custom_fields: { type: 'Hồi Giao/Lấy/Trả hàng', ly_do_hoi_giao_lay_tra: 'Hồi lấy' } },
+        ]);
+      }
+      await $('text=2 bước OK').first().waitFor();
       for (const u of updates) assert.equal(u.headers['content-type'], 'application/json');
       // API chỉ gửi ACAO "*" (không cho cookie): vẫn thành công và mang đủ header trang đang dùng.
       for (const u of updates) { assert.equal(u.headers['x-shop'], '7'); assert.equal(u.headers['x-extra'], '1'); }
@@ -275,10 +290,11 @@ const step = async (name, fn) => {
     await step('một header của trang bị preflight từ chối thì tự gửi lại chỉ với token + header mẫu', async () => {
       rejectExtraHeader = true;
       updates.length = 0;
+      ticketType.clear();
       await $('select').first().selectOption({ label: 'Hồi trả' });
       await $('button:has-text("Đổi 3 ticket sang")').click();
       const t0 = Date.now();
-      while (updates.length < 3) { // không dựa vào chữ tổng kết vì lần chạy trước vẫn còn hiển thị
+      while (updates.length < 6) { // không dựa vào chữ tổng kết vì lần chạy trước vẫn còn hiển thị
         assert.ok(Date.now() - t0 < 15000, 'hết thời gian chờ server nhận request');
         await new Promise((r) => setTimeout(r, 50));
       }
@@ -293,12 +309,13 @@ const step = async (name, fn) => {
       await $('.launcher').click();
       await $('text=Đã tick: 4 ticket').waitFor();
       updates.length = 0;
+      ticketType.clear();
       await $('select').first().selectOption({ label: 'Hồi trả' });
       await $('button:has-text("Đổi 4 ticket sang")').click();
       await $('text=Xong, hãy tải lại danh sách').waitFor();
       await $('text=Thành công 3/4, lỗi 1').waitFor();
       await $('text=691000005 — Không tìm thấy id nội bộ').waitFor();
-      assert.equal(updates.length, 3);
+      assert.equal(updates.length, 6);
       checkedRows.delete('691000005');
     });
 

@@ -102,6 +102,17 @@
     };
   }
 
+  // Các request cần gửi cho một ticket: bước 1 theo mẫu; bước 2 (nếu có) cùng URL/header nhưng body khác.
+  // Bước 2 chứa {{reason}} mà loại không có lý do thì bỏ qua.
+  function renderSteps(tpl, vars) {
+    const steps = [renderTemplate(tpl, vars)];
+    if (tpl.followUpBody) {
+      const needsReason = /\{\{\s*reason\s*\}\}/.test(tpl.followUpBody);
+      if (!needsReason || vars.reason) steps.push(renderTemplate({ ...tpl, body: tpl.followUpBody }, vars));
+    }
+    return steps;
+  }
+
   function placeholdersIn(tpl) {
     const found = new Set();
     for (const text of [tpl.url, tpl.body]) {
@@ -148,7 +159,9 @@
         url: 'https://cm-gateway.ghn.vn/ticket-connector/public-api/web/cs-ticket/update',
         headers: { 'Content-Type': 'application/json' },
         dynamicHeaders: [],
-        body: '{"id":{{id}},"custom_fields":{"type":"{{type}}","ly_do_hoi_giao_lay_tra":"{{reason}}"}}',
+        // Bước 1 đổi loại; bước 2 đặt lý do (trường này chỉ sửa được sau khi ticket đã thuộc loại Hồi Giao/Lấy/Trả).
+        body: '{"id":{{id}},"custom_fields":{"type":"{{type}}"}}',
+        followUpBody: '{"id":{{id}},"custom_fields":{"type":"{{type}}","ly_do_hoi_giao_lay_tra":"{{reason}}"}}',
       },
     };
   }
@@ -228,6 +241,7 @@
     escapeValue,
     buildTemplate,
     renderTemplate,
+    renderSteps,
     placeholdersIn,
     parseTypes,
     stringifyTypes,
